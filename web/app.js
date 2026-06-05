@@ -16,7 +16,8 @@
     { id: "agents",     label: "Agents",     icon: "◈" },
     { id: "skills",     label: "Skills",     icon: "⚙" },
     { id: "harness",    label: "Harness",    icon: "⛨" },
-    { id: "git",        label: "Git",        icon: "⎇" }
+    { id: "git",        label: "Git",        icon: "⎇" },
+    { id: "operations", label: "Operations", icon: "⌁" }
   ];
 
   var current = "overview";
@@ -24,6 +25,14 @@
   var pollTimer = null;
   var lastState = null;
   var inFlight = false;
+
+  // Operations (Phase 2) state
+  var opsMounted = false;     // is the Operations shell currently in #main?
+  var jobsTimer = null;       // GET /api/jobs every 2s
+  var consoleTimer = null;    // GET /api/jobs/:id every 1.5s while running
+  var opsSelectedJob = null;  // currently focused job id
+  var lockSelectValue = "";   // preserve lock-workspace <select> across re-render
+  var runningJobs = 0;        // for nav badge
 
   // ----------------------------------------------------------------
   // Helpers
@@ -152,6 +161,7 @@
       case "agents":     return arr(s.agents && s.agents.level1).length + arr(s.agents && s.agents.level2).length;
       case "skills":     return arr(s.skills).length;
       case "git":        return arr(s.git && s.git.dirty).length;
+      case "operations": return runningJobs || null;
       default:           return null;
     }
   }
@@ -310,9 +320,25 @@
   // ----------------------------------------------------------------
   // Section: Workspaces
   // ----------------------------------------------------------------
+  function lockControl(ws) {
+    // workspace <select> + Lock/Unlock — un-gated direct safe writes (Phase 2)
+    var opts = ws.map(function (w) {
+      var name = (w && w.name) || "";
+      var sel = (name === lockSelectValue) ? " selected" : "";
+      return '<option value="' + esc(name) + '"' + sel + ">" + esc(name) + "</option>";
+    }).join("");
+    return '<span class="lockctl">' +
+      '<select id="lockWsSelect" class="ipt-sel" aria-label="workspace to lock">' +
+        '<option value="">— workspace —</option>' + opts +
+      "</select>" +
+      '<button class="btn" data-action="lock">🔒 Lock</button>' +
+      '<button class="btn" data-action="unlock">Unlock</button>' +
+      "</span>";
+  }
+
   function renderWorkspaces(s) {
     var ws = arr(s.workspaces);
-    var h = viewHead("Workspaces", num(ws.length) + " registered");
+    var h = viewHead("Workspaces", num(ws.length) + " registered", ws.length ? lockControl(ws) : "");
     if (!ws.length) {
       h += emptyBox("◇", "No workspaces yet",
         "No registry and no <code>workspaces/*/CLAUDE.md</code> were discovered. Nothing to show — this is expected on a fresh public install.");
@@ -489,12 +515,15 @@
     }
     h += "</div>";
 
-    // Phase-2 gated actions
+    // Routed Actions — save/pull remain gated under safe/advisory mode
     h += '<div class="panel section-gap"><div class="panel-title">Routed Actions</div>' +
       '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
-      gatedBtn("lock") + gatedBtn("unlock") + gatedBtn("save") + gatedBtn("pull") + gatedBtn("spawn") +
+      gatedBtn("save") + gatedBtn("pull") +
       "</div>" +
-      '<div class="muted" style="margin-top:10px">Phase-2 actions are routed through Claude/Agent SDK so harness hooks fire. Disabled in this read-only cockpit.</div>' +
+      '<div class="muted" style="margin-top:10px">' +
+        "<code>save</code> / <code>pull</code> require full-autonomous mode (not enabled). " +
+        "Lock / Unlock live in <strong>Workspaces</strong>; agent spawn lives in <strong>Operations</strong>." +
+      "</div>" +
       "</div>";
     return h;
   }
@@ -504,7 +533,275 @@
   }
 
   function gatedBtn(type) {
-    return '<button class="btn" disabled>' + esc(type) + ' <span class="phase2">Phase 2</span></button>';
+    return '<button class="btn" disabled title="requires full-autonomous mode (not enabled)">' +
+      esc(type) + ' <span class="phase2">gated</span></button>';
+  }
+
+  // ----------------------------------------------------------------
+  // Section: Operations (Phase 2) — spawn / jobs / live console
+  // The shell is mounted ONCE on entry; sub-regions (#jobsList, #opsConsole)
+  // are refreshed by their own pollers so the form/console survive state polls.
+  // ----------------------------------------------------------------
+  function mountOperations() {
+    var s = lastState || {};
+    var l1 = arr(s.agents && s.agents.level1);
+    var agentOpts = '<option value="COO" selected>COO (default · prompt as-is)</option>';
+    l1.forEach(function (ag) {
+      var n = (ag && ag.name) || "";
+      if (!n || n === "COO") return;
+      agentOpts += '<option value="' + esc(n) + '">' + esc(n) + "</option>";
+    });
+
+    var html =
+      '<div id="opsRoot">' +
+      viewHead("Operations", "spawn read-only Hames agents · live job console",
+        '<span class="badge ok" title="safe / advisory mode">SAFE MODE · read-only spawns</span>') +
+      '<div class="ops-layout">' +
+        // left column: spawn form + jobs list
+        '<div class="ops-left">' +
+          '<div class="panel"><div class="panel-title">Spawn Agent</div>' +
+            '<label class="ipt-label">Agent</label>' +
+            '<select id="spawnAgent" class="ipt-sel ipt-full">' + agentOpts + "</select>" +
+            '<label class="ipt-label">Task / prompt</label>' +
+            '<textarea id="spawnPrompt" class="ipt-area" rows="5" ' +
+              'placeholder="Describe the analysis. The agent can only Read/Grep/Glob/WebSearch and reason — it cannot write, run shell, or spawn subagents."></textarea>' +
+            '<div class="ops-form-foot">' +
+              '<span class="muted">Runs under the Hames harness · read-only</span>' +
+              '<button class="btn btn-open" data-ops="launch">▶ Launch</button>' +
+            "</div>" +
+          "</div>" +
+          '<div class="panel section-gap" style="padding:0">' +
+            '<div class="panel-title" style="padding:14px 14px 8px">Jobs</div>' +
+            '<div id="jobsList"><div class="muted" style="padding:0 14px 14px">Loading…</div></div>' +
+          "</div>" +
+        "</div>" +
+        // right column: live console
+        '<div class="ops-right">' +
+          '<div class="panel ops-console-panel">' +
+            '<div class="panel-title">Job Console</div>' +
+            '<div id="opsConsole" class="ops-console">' +
+              '<div class="muted">Select a job or launch an agent to stream its output here.</div>' +
+            "</div>" +
+          "</div>" +
+        "</div>" +
+      "</div></div>";
+
+    byId("main").innerHTML = html;
+
+    // single delegated handler for the (stable) ops shell
+    var root = byId("opsRoot");
+    root.addEventListener("click", function (e) {
+      var launch = e.target.closest('[data-ops="launch"]');
+      if (launch) { launchSpawn(); return; }
+      var stop = e.target.closest('[data-ops="stop"]');
+      if (stop) { stopJob(stop.getAttribute("data-job")); return; }
+      var row = e.target.closest("[data-job]");
+      if (row && !stop) { selectJob(row.getAttribute("data-job")); return; }
+    });
+
+    refreshJobs(); // immediate paint
+    if (opsSelectedJob) { renderSelectedJobShell(); pollConsoleOnce(true); } // restore console on re-entry
+  }
+
+  function startOpsTimers() {
+    stopOpsTimers();
+    jobsTimer = setInterval(refreshJobs, 2000);
+  }
+
+  function stopOpsTimers() {
+    if (jobsTimer) { clearInterval(jobsTimer); jobsTimer = null; }
+    stopConsoleTimer();
+  }
+
+  function stopConsoleTimer() {
+    if (consoleTimer) { clearInterval(consoleTimer); consoleTimer = null; }
+  }
+
+  // -- jobs list -------------------------------------------------------------
+  function refreshJobs() {
+    fetch("/api/jobs", { headers: { Accept: "application/json" } })
+      .then(function (r) { return r.ok ? r.json() : { jobs: [] }; })
+      .then(function (d) { renderJobsList(arr(d && d.jobs)); })
+      .catch(function () { /* leave previous list */ });
+  }
+
+  function statusBadge(st) {
+    var s = String(st || "").toLowerCase();
+    if (s === "running") return '<span class="badge run">● RUNNING</span>';
+    if (s === "done") return '<span class="badge ok">✓ DONE</span>';
+    if (s === "error") return '<span class="badge miss">✗ ERROR</span>';
+    return '<span class="badge">' + esc(st || "?") + "</span>";
+  }
+
+  function renderJobsList(jobs) {
+    var el = byId("jobsList");
+    if (!el) return;
+    runningJobs = jobs.filter(function (j) { return j && j.status === "running"; }).length;
+    // refresh the Operations nav badge with the live running count
+    var navBadge = document.querySelector('[data-nav="operations"] .nav-badge');
+    if (navBadge) navBadge.textContent = num(runningJobs);
+
+    if (!jobs.length) {
+      el.innerHTML = '<div class="muted" style="padding:0 14px 14px">No jobs yet. Launch an agent to begin.</div>';
+      return;
+    }
+    var html = jobs.map(function (j) {
+      j = j || {};
+      var active = (j.id === opsSelectedJob) ? " active" : "";
+      var label = j.agent || j.label || j.kind || "job";
+      return '<div class="job-row' + active + '" data-job="' + esc(j.id) + '">' +
+        '<div class="job-row-top">' +
+          '<span class="tag t-task">' + esc(label) + "</span>" +
+          statusBadge(j.status) +
+          '<span class="job-time mono">' + (j.startedAt ? relTime(j.startedAt) : "") + "</span>" +
+        "</div>" +
+        '<div class="job-summary">' + esc(j.summary || "—") + "</div>" +
+      "</div>";
+    }).join("");
+    el.innerHTML = html;
+  }
+
+  // -- console ---------------------------------------------------------------
+  function selectJob(id) {
+    if (!id) return;
+    opsSelectedJob = id;
+    stopConsoleTimer();
+    renderSelectedJobShell();
+    refreshJobs();           // re-highlight active row
+    pollConsoleOnce(true);   // immediate fetch; starts timer if still running
+  }
+
+  function renderSelectedJobShell() {
+    var el = byId("opsConsole");
+    if (el) el.innerHTML = '<div class="muted">Loading job ' + esc(opsSelectedJob) + " …</div>";
+  }
+
+  function pollConsoleOnce(startTimer) {
+    var id = opsSelectedJob;
+    if (!id) return;
+    fetch("/api/jobs/" + encodeURIComponent(id), { headers: { Accept: "application/json" } })
+      .then(function (r) {
+        if (r.status === 404) throw new Error("job not found");
+        return r.json();
+      })
+      .then(function (job) {
+        if (opsSelectedJob !== id) return; // selection changed mid-flight
+        renderConsole(job || {});
+        if (job && job.status === "running") {
+          if (startTimer && !consoleTimer) {
+            consoleTimer = setInterval(function () { pollConsoleOnce(false); }, 1500);
+          }
+        } else {
+          stopConsoleTimer(); // terminal state → stop polling
+        }
+      })
+      .catch(function (err) {
+        if (opsSelectedJob !== id) return;
+        stopConsoleTimer();
+        var el = byId("opsConsole");
+        if (el) el.innerHTML = emptyBox("⚠", "Console error", esc(String(err && err.message || err)));
+      });
+  }
+
+  function renderConsole(job) {
+    var el = byId("opsConsole");
+    if (!el) return;
+    var prevScroll = el.scrollTop;
+    var atBottom = (el.scrollHeight - el.scrollTop - el.clientHeight) < 40;
+
+    var events = arr(job.events);
+    var running = job.status === "running";
+    var label = job.agent || job.kind || "job";
+
+    var head = '<div class="console-head">' +
+      '<div class="console-head-l">' +
+        '<span class="tag t-task">' + esc(label) + "</span>" +
+        statusBadge(job.status) +
+        (running ? '<span class="spinner" aria-hidden="true"></span>' : "") +
+      "</div>" +
+      '<div class="console-head-r">' +
+        (job.startedAt ? '<span class="mono muted">' + esc(job.startedAt) + "</span>" : "") +
+        (running ? '<button class="btn btn-stop" data-ops="stop" data-job="' + esc(job.id) + '">■ Stop</button>' : "") +
+      "</div>" +
+    "</div>";
+
+    var prompt = job.prompt ? '<div class="console-prompt"><span class="cp-label">PROMPT</span>' + esc(job.prompt) + "</div>" : "";
+
+    var body = "";
+    if (!events.length) {
+      body = '<div class="muted">' + (running ? "Awaiting first event…" : "No events.") + "</div>";
+    } else {
+      body = events.map(function (ev) { return renderEvent(ev || {}); }).join("");
+    }
+
+    el.innerHTML = head + prompt + '<div class="console-events">' + body + "</div>";
+
+    // autoscroll to newest while running and user was at bottom; else preserve
+    if (running && atBottom) el.scrollTop = el.scrollHeight;
+    else el.scrollTop = prevScroll;
+  }
+
+  function renderEvent(ev) {
+    var t = ev.t;
+    if (t === "text") {
+      return '<div class="ev ev-text">' + esc(ev.text || "") + "</div>";
+    }
+    if (t === "tool") {
+      return '<div class="ev ev-tool"><span class="tag ' + toolClass(ev.tool) + '">⚙ ' + esc(ev.tool || "tool") + "</span>" +
+        '<span class="ev-brief">' + esc(ev.brief || "") + "</span></div>";
+    }
+    if (t === "result") {
+      return '<div class="ev ev-result ' + (ev.isError ? "err" : "ok") + '">' +
+        '<span class="ev-rlabel">' + (ev.isError ? "RESULT · ERROR" : "RESULT") + "</span>" +
+        esc(ev.text || "") + "</div>";
+    }
+    if (t === "error") {
+      return '<div class="ev ev-err">' + esc(ev.text || "") + "</div>";
+    }
+    // system or unknown → muted
+    return '<div class="ev ev-sys">' + esc(ev.text || (t ? ("[" + t + "]") : "")) + "</div>";
+  }
+
+  // -- launch / stop ---------------------------------------------------------
+  function launchSpawn() {
+    var agentEl = byId("spawnAgent"), promptEl = byId("spawnPrompt");
+    var agent = agentEl ? agentEl.value : "COO";
+    var prompt = promptEl ? promptEl.value.trim() : "";
+    if (!prompt) { setMsg("enter a task prompt before launching", "warn"); if (promptEl) promptEl.focus(); return; }
+    if (!window.confirm("Launch an autonomous Hames agent? It runs under the harness.")) return;
+
+    setMsg("spawning " + agent + " …", "");
+    fetch("/api/spawn", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent: agent, prompt: prompt })
+    })
+      .then(function (r) { return r.json().catch(function () { return { ok: false, reason: "bad response" }; }); })
+      .then(function (res) {
+        res = res || {};
+        if (res.ok && res.jobId) {
+          setMsg("✓ spawned " + agent + " → " + res.jobId, "ok");
+          if (promptEl) promptEl.value = "";
+          selectJob(res.jobId);
+        } else {
+          setMsg("✗ spawn rejected: " + (res.reason || res.message || "unknown"), "err");
+        }
+      })
+      .catch(function (err) { setMsg("✗ spawn error: " + (err && err.message || err), "err"); });
+  }
+
+  function stopJob(id) {
+    if (!id) return;
+    if (!window.confirm("Stop this running job?")) return;
+    setMsg("stopping " + id + " …", "");
+    fetch("/api/jobs/" + encodeURIComponent(id) + "/stop", { method: "POST" })
+      .then(function (r) { return r.json().catch(function () { return {}; }); })
+      .then(function (res) {
+        setMsg((res && res.ok) ? "✓ stop signalled" : "stop failed", (res && res.ok) ? "ok" : "err");
+        pollConsoleOnce(false);
+        refreshJobs();
+      })
+      .catch(function (err) { setMsg("✗ stop error: " + (err && err.message || err), "err"); });
   }
 
   // ----------------------------------------------------------------
@@ -530,18 +827,34 @@
     renderNav(s);
     renderRail(s);
 
-    var fn = RENDERERS[current] || renderOverview;
-    try {
-      mainEl.innerHTML = fn(s);
-    } catch (e) {
-      mainEl.innerHTML = emptyBox("⚠", "Render error", esc(String(e && e.message || e)));
+    if (current === "operations") {
+      // Operations owns its own DOM + pollers; mount the shell once and leave it
+      // alone on subsequent state polls so the form/console aren't wiped.
+      if (!opsMounted) {
+        try { mountOperations(); opsMounted = true; startOpsTimers(); }
+        catch (e) { mainEl.innerHTML = emptyBox("⚠", "Render error", esc(String(e && e.message || e))); }
+      }
+    } else {
+      var fn = RENDERERS[current] || renderOverview;
+      try {
+        mainEl.innerHTML = fn(s);
+      } catch (e) {
+        mainEl.innerHTML = emptyBox("⚠", "Render error", esc(String(e && e.message || e)));
+      }
+      // restore scroll (operations manages its own)
+      if (mainEl) mainEl.scrollTop = mainScroll;
     }
 
-    // restore scroll
-    if (mainEl) mainEl.scrollTop = mainScroll;
     if (railEl) byId("railFeed").scrollTop = railScroll;
 
     renderStatus(s);
+  }
+
+  function setSection(id) {
+    if (id === current) return;
+    if (current === "operations") { stopOpsTimers(); opsMounted = false; }
+    current = id;
+    render();
   }
 
   function renderStatus(s) {
@@ -651,15 +964,29 @@
     byId("leftnav").addEventListener("click", function (e) {
       var item = e.target.closest("[data-nav]");
       if (!item) return;
-      current = item.getAttribute("data-nav");
-      render();
+      setSection(item.getAttribute("data-nav"));
     });
 
-    // action clicks in main (delegated)
+    // action clicks in main (delegated). Operations uses data-ops, not data-action.
     byId("main").addEventListener("click", function (e) {
       var b = e.target.closest("[data-action]");
       if (!b || b.disabled) return;
-      doAction(b.getAttribute("data-action"), b.getAttribute("data-arg") || undefined, b);
+      var action = b.getAttribute("data-action");
+      if (action === "lock") {
+        var sel = byId("lockWsSelect");
+        var ws = sel ? sel.value : "";
+        if (!ws) { setMsg("select a workspace to lock", "warn"); return; }
+        lockSelectValue = ws;
+        doAction("lock", ws, b);
+        return;
+      }
+      if (action === "unlock") { doAction("unlock", undefined, b); return; }
+      doAction(action, b.getAttribute("data-arg") || undefined, b);
+    });
+
+    // remember the lock-workspace selection across state-driven re-renders
+    byId("main").addEventListener("change", function (e) {
+      if (e.target && e.target.id === "lockWsSelect") lockSelectValue = e.target.value;
     });
 
     byId("liveToggle").addEventListener("click", function () { setLive(!live); });

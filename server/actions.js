@@ -8,12 +8,57 @@ const path = require('path');
 const fs = require('fs');
 const { execFileSync } = require('child_process');
 
-const GATED = new Set(['lock', 'unlock', 'save', 'pull', 'spawn']);
-const GATED_MESSAGE =
-  'Phase 2 — routed through Claude/Agent SDK so harness hooks fire.';
+// SAFE MODE: save/pull are not executed in this pass — they stay gated.
+const FULL_AUTO_MESSAGE = 'requires full-autonomous mode';
 
 function withinRoot(root, abs) {
   return abs === root || abs.startsWith(root + path.sep);
+}
+
+function readLockData(lockPath) {
+  try {
+    const data = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+    if (data && typeof data === 'object' && data.version === 2 && data.sessions) {
+      return data;
+    }
+  } catch (_) { /* missing / v1 / malformed → start a fresh v2 below */ }
+  return { version: 2, sessions: {} };
+}
+
+function appendAudit(cfg, entry) {
+  try {
+    fs.appendFileSync(cfg.auditLog, JSON.stringify(entry) + '\n');
+  } catch (_) { /* audit is best-effort; never fail the action on it */ }
+}
+
+// setLock/clearLock manage the cockpit's OWN lock entry (keyed 'cockpit').
+// This sets the cockpit-declared lock; it does NOT force-lock other already-
+// running Claude sessions (each session owns its own entry).
+function setLock(cfg, workspace) {
+  if (!workspace) return { ok: false, error: 'missing workspace' };
+  const iso = new Date().toISOString();
+  const data = readLockData(cfg.lockFile);
+  data.sessions.cockpit = { workspace, locked: true, updated_at: iso };
+  try {
+    fs.writeFileSync(cfg.lockFile, JSON.stringify(data, null, 2));
+  } catch (err) {
+    return { ok: false, error: String((err && err.message) || err) };
+  }
+  appendAudit(cfg, { ts: iso, hook: 'cockpit', result: 'LOCK_SET', tool: 'cockpit', workspace });
+  return { ok: true, lock: { workspace, locked: true } };
+}
+
+function clearLock(cfg) {
+  const iso = new Date().toISOString();
+  const data = readLockData(cfg.lockFile);
+  data.sessions.cockpit = { workspace: null, locked: false, updated_at: iso };
+  try {
+    fs.writeFileSync(cfg.lockFile, JSON.stringify(data, null, 2));
+  } catch (err) {
+    return { ok: false, error: String((err && err.message) || err) };
+  }
+  appendAudit(cfg, { ts: iso, hook: 'cockpit', result: 'LOCK_CLEAR', tool: 'cockpit', workspace: null });
+  return { ok: true, lock: { workspace: null, locked: false } };
 }
 
 function handleAction(cfg, body) {
@@ -52,12 +97,20 @@ function handleAction(cfg, body) {
       return opened ? { ok: true } : { ok: false, error: 'opener failed' };
     }
 
+    case 'lock':
+      return setLock(cfg, arg);
+
+    case 'unlock':
+      return clearLock(cfg);
+
+    // SAFE MODE: save/pull are not executed in this pass (no runSlash).
+    case 'save':
+    case 'pull':
+      return { ok: false, gated: true, message: FULL_AUTO_MESSAGE };
+
     default:
-      if (GATED.has(type)) {
-        return { ok: false, gated: true, phase: 2, message: GATED_MESSAGE };
-      }
       return { ok: false, error: `unknown action: ${type}` };
   }
 }
 
-module.exports = { handleAction };
+module.exports = { handleAction, setLock, clearLock };

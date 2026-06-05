@@ -11,8 +11,10 @@ const url = require('url');
 const { loadConfig } = require('./config');
 const { buildState } = require('./state');
 const { handleAction } = require('./actions');
+const { createOrchestrator } = require('./orchestrator');
 
 const cfg = loadConfig();
+const orchestrator = createOrchestrator(cfg);
 
 const CONTENT_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -108,6 +110,51 @@ const server = http.createServer(async (req, res) => {
       sendJSON(res, 400, { ok: false, error: String((err && err.message) || err) });
     }
     return;
+  }
+
+  // --- API: spawn agent (read-only claude run) ---
+  if (pathname === '/api/spawn' && req.method === 'POST') {
+    try {
+      const raw = await readBody(req);
+      let body = {};
+      if (raw) {
+        try {
+          body = JSON.parse(raw);
+        } catch (_) {
+          sendJSON(res, 400, { ok: false, error: 'invalid JSON body' });
+          return;
+        }
+      }
+      sendJSON(res, 200, orchestrator.spawnAgent({ agent: body.agent, prompt: body.prompt }));
+    } catch (err) {
+      sendJSON(res, 400, { ok: false, error: String((err && err.message) || err) });
+    }
+    return;
+  }
+
+  // --- API: jobs list ---
+  if (pathname === '/api/jobs' && req.method === 'GET') {
+    sendJSON(res, 200, { jobs: orchestrator.getJobs() });
+    return;
+  }
+
+  // --- API: single job / stop (parse :id manually, no framework) ---
+  if (pathname.startsWith('/api/jobs/')) {
+    const rest = pathname.slice('/api/jobs/'.length);
+    if (rest.endsWith('/stop') && req.method === 'POST') {
+      const id = decodeURIComponent(rest.slice(0, -'/stop'.length));
+      sendJSON(res, 200, { ok: orchestrator.stopJob(id) });
+      return;
+    }
+    if (req.method === 'GET' && rest && !rest.includes('/')) {
+      const job = orchestrator.getJob(decodeURIComponent(rest));
+      if (!job) {
+        sendJSON(res, 404, { error: 'job not found' });
+        return;
+      }
+      sendJSON(res, 200, job);
+      return;
+    }
   }
 
   // --- static (GET only) ---
