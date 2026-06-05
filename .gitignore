@@ -1,0 +1,10 @@
+# Hames Cockpit — ignore
+node_modules/
+*.log
+.cockpit_actions.log
+.env
+.env.*
+.DS_Store
+Thumbs.db
+npm-debug.log*
+*.pid
