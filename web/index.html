@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <title>Hames Cockpit</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <!-- ======================= TOP KPI BAR ======================= -->
+  <header class="topbar" id="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">◈</span>
+      <span class="brand-name">HAMES<span class="brand-sub">·COCKPIT</span></span>
+      <span class="brand-status" id="connDot" title="connection"></span>
+    </div>
+
+    <div class="kpi-bar" id="kpiBar" aria-live="polite">
+      <!-- KPI chips injected by app.js -->
+    </div>
+
+    <div class="controls">
+      <span class="clock mono" id="clock">--:--:--</span>
+      <button type="button" class="ctl ctl-live" id="liveToggle" aria-pressed="false">
+        <span class="live-dot" aria-hidden="true"></span><span class="ctl-label">LIVE</span>
+      </button>
+      <button type="button" class="ctl" id="refreshBtn" title="Re-fetch state">⟳ REFRESH</button>
+    </div>
+  </header>
+
+  <!-- ======================= MAIN LAYOUT ======================= -->
+  <div class="layout">
+    <!-- LEFT NAV -->
+    <nav class="leftnav" id="leftnav" aria-label="Sections">
+      <!-- nav items injected by app.js -->
+    </nav>
+
+    <!-- CENTER MAIN -->
+    <main class="main" id="main" tabindex="-1">
+      <div class="boot">Initializing cockpit telemetry…</div>
+    </main>
+
+    <!-- RIGHT RAIL: LIVE OPERATIONS -->
+    <aside class="rail" aria-label="Live Operations">
+      <div class="rail-head">
+        <span class="rail-title">LIVE OPERATIONS</span>
+        <span class="rail-count mono" id="railCount">0</span>
+      </div>
+      <div class="rail-feed" id="railFeed">
+        <!-- session feed injected by app.js -->
+      </div>
+    </aside>
+  </div>
+
+  <!-- ======================= FOOTER STATUS ======================= -->
+  <footer class="statusbar" id="statusbar">
+    <span class="st-item" id="stRoot">root: —</span>
+    <span class="st-sep">│</span>
+    <span class="st-item" id="stPlatform">platform: —</span>
+    <span class="st-sep">│</span>
+    <span class="st-item" id="stGen">snapshot: —</span>
+    <span class="st-spacer"></span>
+    <span class="st-item" id="stMsg"></span>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>
