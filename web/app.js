@@ -111,6 +111,155 @@
   }
 
   // ----------------------------------------------------------------
+  // Visualization helpers (inline SVG, zero-dependency, zero-asset)
+  // ----------------------------------------------------------------
+  // Hex palette mirror of CSS vars — SVG presentation attributes can't
+  // resolve var(), so charts use literals (HTML legend swatches use var()).
+  var COL = {
+    cyan: "#22d3ee", teal: "#34d399", amber: "#f59e0b", red: "#ef4444",
+    violet: "#a78bfa", text: "#cbd5e1", muted: "#64748b",
+    track: "#111a2e", read: "#475569", other: "#334155"
+  };
+
+  var _uid = 0;
+  function uid(p) { return (p || "v") + "_" + (++_uid); }
+
+  function hashStr(s) {
+    var h = 0; s = String(s || "");
+    for (var i = 0; i < s.length; i++) { h = ((h << 5) - h + s.charCodeAt(i)) | 0; }
+    return Math.abs(h);
+  }
+
+  // Segmented donut. segments:[{value,color}]. opts:{size,stroke,center,centerSub,centerColor,centerSize}
+  function svgDonut(segments, opts) {
+    opts = opts || {};
+    var size = opts.size || 132, sw = opts.stroke || 15;
+    var r = (size - sw) / 2, cx = size / 2, cy = size / 2;
+    var C = 2 * Math.PI * r, total = 0, i;
+    for (i = 0; i < segments.length; i++) total += Math.max(0, segments[i].value || 0);
+    var track = '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="none" stroke="' + COL.track + '" stroke-width="' + sw + '"/>';
+    var segs = "", off = 0;
+    if (total > 0) {
+      for (i = 0; i < segments.length; i++) {
+        var v = Math.max(0, segments[i].value || 0);
+        if (!v) continue;
+        var len = (v / total) * C;
+        segs += '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="none" stroke="' + segments[i].color +
+          '" stroke-width="' + sw + '" stroke-dasharray="' + len.toFixed(2) + ' ' + (C - len).toFixed(2) +
+          '" stroke-dashoffset="' + (-off).toFixed(2) + '"/>';
+        off += len;
+      }
+    }
+    var ring = '<g transform="rotate(-90 ' + cx + ' ' + cy + ')">' + track + segs + '</g>';
+    var center = "";
+    if (opts.center != null) {
+      center += '<text x="' + cx + '" y="' + (cy + (opts.centerSub ? -1 : 5)) + '" text-anchor="middle" class="svg-num" ' +
+        'style="font-size:' + (opts.centerSize || 26) + 'px;font-weight:700" fill="' + (opts.centerColor || COL.text) + '">' + esc(opts.center) + '</text>';
+      if (opts.centerSub)
+        center += '<text x="' + cx + '" y="' + (cy + 16) + '" text-anchor="middle" ' +
+          'style="font-size:8.5px;letter-spacing:1.5px" fill="' + COL.muted + '">' + esc(opts.centerSub) + '</text>';
+    }
+    return '<svg width="' + size + '" height="' + size + '" viewBox="0 0 ' + size + ' ' + size + '">' + ring + center + '</svg>';
+  }
+
+  // Filled area sparkline that stretches to its container width.
+  function svgArea(values, opts) {
+    opts = opts || {};
+    var W = 560, H = opts.height || 96, pad = 8, n = values.length;
+    if (!n) return '<div class="muted" style="padding:28px 0;text-align:center">no activity in range</div>';
+    var maxV = 1, i;
+    for (i = 0; i < n; i++) if (values[i] > maxV) maxV = values[i];
+    var id = uid("area");
+    function X(k) { return n === 1 ? W / 2 : (k / (n - 1)) * (W - 2 * pad) + pad; }
+    function Y(v) { return H - pad - (v / maxV) * (H - 2 * pad); }
+    var line = "", k;
+    for (k = 0; k < n; k++) line += (k === 0 ? "M" : "L") + X(k).toFixed(1) + "," + Y(values[k]).toFixed(1) + " ";
+    var area = line + "L" + X(n - 1).toFixed(1) + "," + (H - pad) + " L" + X(0).toFixed(1) + "," + (H - pad) + " Z";
+    return '<svg class="areachart" width="100%" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none">' +
+      '<defs><linearGradient id="' + id + '" x1="0" y1="0" x2="0" y2="1">' +
+      '<stop offset="0" stop-color="rgba(34,211,238,0.40)"/>' +
+      '<stop offset="1" stop-color="rgba(34,211,238,0)"/></linearGradient></defs>' +
+      '<path d="' + area + '" fill="url(#' + id + ')"/>' +
+      '<path d="' + line + '" fill="none" stroke="' + COL.cyan + '" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>' +
+      '</svg>';
+  }
+
+  // Deterministic monogram avatar (gradient from name hash + role-colored ring).
+  function svgAvatar(name, opts) {
+    opts = opts || {};
+    var size = opts.size || 46, h = hashStr(name), hue = h % 360, hue2 = (hue + 38) % 360;
+    var id = uid("av"), ring = opts.ring || COL.cyan, txt = initials(name), r = size / 2;
+    return '<svg width="' + size + '" height="' + size + '" viewBox="0 0 ' + size + ' ' + size + '">' +
+      '<defs><linearGradient id="' + id + '" x1="0" y1="0" x2="1" y2="1">' +
+      '<stop offset="0" stop-color="hsl(' + hue + ',52%,46%)"/>' +
+      '<stop offset="1" stop-color="hsl(' + hue2 + ',58%,28%)"/></linearGradient></defs>' +
+      '<circle cx="' + r + '" cy="' + r + '" r="' + (r - 1.5) + '" fill="url(#' + id + ')" stroke="' + ring + '" stroke-width="2"/>' +
+      '<text x="' + r + '" y="' + r + '" text-anchor="middle" dominant-baseline="central" ' +
+      'style="font-size:' + (size * 0.34) + 'px;font-weight:700" fill="#ffffff">' + esc(txt) + '</text></svg>';
+  }
+
+  function initials(name) {
+    var p = String(name || "?").replace(/[_\-.]/g, " ").trim().split(/\s+/);
+    if (p.length === 1) return (p[0] || "?").slice(0, 2).toUpperCase();
+    return ((p[0][0] || "") + (p[p.length - 1][0] || "")).toUpperCase();
+  }
+
+  var ROLE_COLORS = {
+    CFO: COL.teal, CSO: COL.cyan, CBO: COL.violet, CTO: COL.amber,
+    MARKETER: COL.teal, COO: COL.cyan, HAMES: COL.cyan
+  };
+  function roleColor(name, lvl2) {
+    var key = String(name || "").toUpperCase().split("_")[0];
+    return ROLE_COLORS[key] || (lvl2 ? COL.teal : COL.cyan);
+  }
+
+  // Bucket the session feed into N bins, auto-spanning the window it covers.
+  function activityBuckets(feed, nb) {
+    nb = nb || 28;
+    var f = arr(feed), times = [], i, d;
+    for (i = 0; i < f.length; i++) { d = parseTs(f[i] && f[i].ts); if (d) times.push(d.getTime()); }
+    var b = []; for (i = 0; i < nb; i++) b.push(0);
+    if (!times.length) return { buckets: b, span: null };
+    var now = Date.now(), minT = times[0];
+    for (i = 1; i < times.length; i++) if (times[i] < minT) minT = times[i];
+    var span = Math.max(now - minT, 60000);
+    for (i = 0; i < times.length; i++) {
+      var idx = Math.floor(((times[i] - minT) / span) * nb);
+      if (idx < 0) idx = 0;
+      if (idx >= nb) idx = nb - 1;
+      b[idx]++;
+    }
+    return { buckets: b, span: humanSpan(span) };
+  }
+
+  function humanSpan(ms) {
+    var m = Math.round(ms / 60000);
+    if (m < 60) return m + "m";
+    var hr = Math.floor(m / 60), rm = m % 60;
+    if (hr < 24) return hr + "h" + (rm ? " " + rm + "m" : "");
+    return Math.round(hr / 24) + "d";
+  }
+
+  function toolMix(feed) {
+    var m = { write: 0, edit: 0, bash: 0, read: 0, task: 0, other: 0 }, f = arr(feed), i, c;
+    for (i = 0; i < f.length; i++) {
+      c = toolClass(f[i] && f[i].tool);
+      if (c === "t-write") m.write++;
+      else if (c === "t-edit") m.edit++;
+      else if (c === "t-bash") m.bash++;
+      else if (c === "t-read") m.read++;
+      else if (c === "t-task") m.task++;
+      else m.other++;
+    }
+    return m;
+  }
+
+  function legRow(color, label, value) {
+    return '<div class="leg-row"><span class="sw" style="background:' + color + '"></span>' +
+      '<span class="ln">' + esc(label) + '</span><span class="lv">' + esc(value) + '</span></div>';
+  }
+
+  // ----------------------------------------------------------------
   // KPI bar
   // ----------------------------------------------------------------
   function chip(label, valueHtml, cls) {
@@ -205,7 +354,7 @@
       var tc = toolClass(op.tool);
       var ws = op.workspace ? '<span class="tag ws">' + esc(op.workspace) + "</span>" : "";
       var file = op.file ? '<div class="op-file">' + esc(op.file) + "</div>" : "";
-      return '<div class="op">' +
+      return '<div class="op ' + tc + '">' +
         '<div class="op-row1"><span class="tag ' + tc + '">' + esc(op.tool || "?") + "</span>" + ws + "</div>" +
         file +
         '<div class="op-ts">' + relTime(op.ts) + " · " + esc(op.ts || "") + "</div>" +
@@ -252,52 +401,106 @@
   function renderOverview(s) {
     var ws = arr(s.workspaces);
     var k = s.kpis || {};
-    var h = '';
+    var feed = arr(s.sessionFeed);
+    var h = "";
 
     h += viewHead("Command Overview", "operational snapshot of the Hames system",
       '<button class="btn" data-action="git.fetch">⟱ git fetch</button>');
 
-    // KPI summary panel
-    var aw = k.activeWorkspace || {};
-    h += '<div class="grid cols-3">';
-    h += summaryCard("Active Workspace", aw.name ? esc(aw.name) : "—", aw.locked ? "🔒 locked" : "unlocked", aw.locked ? "warn" : "");
-    h += summaryCard("Actions Today", num(k.actionsToday || 0), "session-log events", "");
-    h += summaryCard("Locked Sessions", num(k.lockedSessions || 0), "across workspaces", "");
-    h += "</div>";
+    // ---- HERO: harness gauge · activity area · tool-mix donut ----
+    var hd = k.harness || {};
+    var pass = hd.PASS || 0, blocked = hd.BLOCKED || 0, bypass = hd.BYPASS || 0;
+    var hTotal = pass + blocked + bypass;
+    var passPct = hTotal ? Math.round((pass / hTotal) * 100) : 0;
+    var gaugeColor = blocked ? COL.red : (bypass ? COL.amber : COL.teal);
 
-    // Programs (workspaces as ShipOS programs)
-    h += '<div class="panel-title section-gap">Programs · Workspace Activity</div>';
+    h += '<div class="hero">';
+
+    // card 1 — harness health gauge
+    h += '<div class="card"><div class="card-title">Harness Health' +
+      '<span class="ct-aux">' + num(hTotal) + ' checks</span></div>' +
+      '<div class="gauge">' +
+        svgDonut(
+          [{ value: pass, color: COL.teal }, { value: blocked, color: COL.red }, { value: bypass, color: COL.amber }],
+          { center: passPct + "%", centerSub: "PASS RATE", centerColor: gaugeColor, size: 122, stroke: 14 }
+        ) +
+        '<div class="leg">' +
+          legRow("var(--teal)", "Pass", num(pass)) +
+          legRow("var(--red)", "Blocked", num(blocked)) +
+          legRow("var(--amber)", "Bypass", num(bypass)) +
+        '</div>' +
+      '</div></div>';
+
+    // card 2 — activity area chart + mini stats
+    var ab = activityBuckets(feed, 28);
+    h += '<div class="card"><div class="card-title">Activity' +
+      '<span class="ct-aux">' + (ab.span ? "last " + esc(ab.span) : "no data") + '</span></div>' +
+      svgArea(ab.buckets, { height: 92 }) +
+      '<div class="minstat-row">' +
+        '<div class="minstat"><span class="v good">' + num(k.actionsToday || 0) + '</span><span class="l">Actions Today</span></div>' +
+        '<div class="minstat"><span class="v cyan">' + num(feed.length) + '</span><span class="l">Recent Ops</span></div>' +
+        '<div class="minstat"><span class="v">' + num(k.lockedSessions || 0) + '</span><span class="l">Locked Sessions</span></div>' +
+        '<div class="minstat"><span class="v">' + num(k.workspaceCount || 0) + '</span><span class="l">Workspaces</span></div>' +
+      '</div></div>';
+
+    // card 3 — tool-mix donut
+    var tm = toolMix(feed);
+    h += '<div class="card"><div class="card-title">Tool Mix</div>' +
+      '<div class="donut">' +
+        svgDonut(
+          [
+            { value: tm.write, color: COL.cyan }, { value: tm.edit, color: COL.teal },
+            { value: tm.bash, color: COL.amber }, { value: tm.read, color: COL.read },
+            { value: tm.task, color: COL.violet }, { value: tm.other, color: COL.other }
+          ],
+          { center: num(feed.length), centerSub: "OPS", size: 104, stroke: 13 }
+        ) +
+        '<div class="leg">' +
+          legRow("var(--cyan)", "Write", num(tm.write)) +
+          legRow("var(--teal)", "Edit", num(tm.edit)) +
+          legRow("var(--amber)", "Bash", num(tm.bash)) +
+          legRow("#475569", "Read", num(tm.read)) +
+        '</div>' +
+      '</div></div>';
+
+    h += '</div>'; // .hero
+
+    // ---- Workspace activity ranked bars ----
+    h += '<div class="card"><div class="card-title">Workspace Activity' +
+      '<span class="ct-aux">by session-log actions</span></div>';
     if (!ws.length) {
       h += emptyBox("◇", "No workspaces yet",
         "This looks like a fresh public install. Add a <code>workspace_paths.json</code> registry or " +
         "<code>workspaces/*/CLAUDE.md</code> folders and they'll appear here automatically.");
     } else {
-      var maxA = ws.reduce(function (m, w) { return Math.max(m, (w && w.actions) || 0); }, 0) || 1;
-      h += '<div class="grid cols-auto">';
-      ws.forEach(function (w) {
+      var sorted = ws.slice().sort(function (a, b) { return ((b && b.actions) || 0) - ((a && a.actions) || 0); });
+      var top = sorted.slice(0, 8);
+      var maxA = (top[0] && top[0].actions) || 1;
+      h += '<div class="rbars">';
+      top.forEach(function (w) {
         w = w || {};
         var pct = Math.round(((w.actions || 0) / maxA) * 100);
-        h += '<div class="prog">' +
-          '<div class="prog-head"><span class="prog-name">' + esc(w.name || "?") + "</span>" +
-            lockBadge(w.locked) + (w.exists === false ? " " + existsBadge(false) : "") + "</div>" +
-          '<div class="prog-path">' + esc(w.path || "") + "</div>" +
-          '<div class="bar"><span style="width:' + pct + '%"></span></div>' +
-          '<div class="prog-meta"><span><span class="n">' + num(w.actions || 0) + "</span> actions</span>" +
-            '<span>· ' + (w.lastActivity ? relTime(w.lastActivity) : "no activity") + "</span>" +
-            '<span style="margin-left:auto">' + openBtn(w.path) + "</span></div>" +
-          "</div>";
+        var lk = w.locked ? ' <span class="lk" title="locked">🔒</span>' : "";
+        h += '<div class="rbar">' +
+          '<div class="rbar-label">' + esc(w.name || "?") + lk + '</div>' +
+          '<div class="rbar-track"><div class="rbar-fill" style="width:' + Math.max(pct, 2) + '%"></div></div>' +
+          '<div class="rbar-val">' + num(w.actions || 0) + '</div>' +
+        '</div>';
       });
-      h += "</div>";
+      h += '</div>';
+      if (sorted.length > top.length)
+        h += '<div class="rbar-more">+' + num(sorted.length - top.length) + ' more in <strong>Workspaces</strong></div>';
     }
+    h += '</div>';
 
-    // Recent activity (compact, from sessionFeed)
-    var feed = arr(s.sessionFeed).slice(0, 8);
+    // ---- Recent activity (compact) ----
+    var recent = feed.slice(0, 6);
     h += '<div class="panel section-gap"><div class="panel-title">Recent Activity</div>';
-    if (!feed.length) {
+    if (!recent.length) {
       h += '<div class="muted">No recent activity recorded.</div>';
     } else {
       h += '<table class="tbl"><thead><tr><th>Tool</th><th>Workspace</th><th>File</th><th>When</th></tr></thead><tbody>';
-      feed.forEach(function (op) {
+      recent.forEach(function (op) {
         op = op || {};
         h += "<tr><td><span class='tag " + toolClass(op.tool) + "'>" + esc(op.tool || "?") + "</span></td>" +
           "<td>" + (op.workspace ? "<span class='tag ws'>" + esc(op.workspace) + "</span>" : "<span class='muted'>—</span>") + "</td>" +
@@ -309,12 +512,6 @@
     h += "</div>";
 
     return h;
-  }
-
-  function summaryCard(label, value, sub, cls) {
-    return '<div class="panel"><div class="panel-title">' + esc(label) + "</div>" +
-      '<div class="chip-value ' + (cls ? "v-" + (cls === "warn" ? "warn" : cls) : "") + '" style="font-size:24px">' + value + "</div>" +
-      '<div class="muted" style="margin-top:4px">' + esc(sub) + "</div></div>";
   }
 
   // ----------------------------------------------------------------
@@ -390,10 +587,15 @@
     var h = '<div class="grid cols-auto">';
     list.forEach(function (ag) {
       ag = ag || {};
+      var nm = ag.name || "?";
       h += '<div class="agent-card' + (lvl2 ? " lvl2" : "") + '">' +
-        '<div class="agent-name">' + esc(ag.name || "?") +
-          '<span class="agent-file">' + esc(ag.file || "") + "</span></div>" +
-        '<div class="agent-desc">' + esc(ag.description || "—") + "</div></div>";
+        '<span class="avatar">' + svgAvatar(nm, { ring: roleColor(nm, lvl2), size: 46 }) + "</span>" +
+        '<div class="agent-body">' +
+          '<div class="agent-name">' + esc(nm) +
+            '<span class="agent-file">' + esc(ag.file || "") + "</span></div>" +
+          '<div class="agent-desc">' + esc(ag.description || "—") + "</div>" +
+          '<div class="agent-role">' + (lvl2 ? "Specialist" : "Domain Lead") + "</div>" +
+        "</div></div>";
     });
     return h + "</div>";
   }
@@ -429,14 +631,34 @@
     var win = hd.window || 0;
     var h = viewHead("Harness", "compliance over last " + num(win) + " audit entries");
 
-    // bars
     var pass = hd.PASS || 0, blocked = hd.BLOCKED || 0, bypass = hd.BYPASS || 0;
+    var total = pass + blocked + bypass;
+    var passPct = total ? Math.round((pass / total) * 100) : 0;
+    var gaugeColor = blocked ? COL.red : (bypass ? COL.amber : COL.teal);
+    function pctOf(v) { return total ? Math.round((v / total) * 100) + "%" : "0%"; }
+
+    h += '<div class="hero" style="grid-template-columns:minmax(250px,310px) 1fr">';
+    // gauge
+    h += '<div class="card"><div class="card-title">Result Distribution' +
+      '<span class="ct-aux">' + num(total) + ' checks</span></div>' +
+      '<div class="gauge">' +
+        svgDonut(
+          [{ value: pass, color: COL.teal }, { value: blocked, color: COL.red }, { value: bypass, color: COL.amber }],
+          { center: passPct + "%", centerSub: "PASS RATE", centerColor: gaugeColor, size: 144, stroke: 16 }
+        ) +
+        '<div class="leg">' +
+          legRow("var(--teal)", "Pass", num(pass) + " · " + pctOf(pass)) +
+          legRow("var(--red)", "Blocked", num(blocked) + " · " + pctOf(blocked)) +
+          legRow("var(--amber)", "Bypass", num(bypass) + " · " + pctOf(bypass)) +
+        '</div>' +
+      '</div></div>';
+    // volume bars
     var maxV = Math.max(pass, blocked, bypass, 1);
-    h += '<div class="panel"><div class="panel-title">Result Distribution</div>';
+    h += '<div class="card"><div class="card-title">Volume</div>';
     h += hRow("PASS", pass, maxV, "pass");
     h += hRow("BLOCKED", blocked, maxV, "blocked");
     h += hRow("BYPASS", bypass, maxV, "bypass");
-    h += "</div>";
+    h += "</div></div>";
 
     // audit feed
     h += '<div class="panel section-gap"><div class="panel-title">Audit Feed</div>';
