@@ -1,0 +1,16 @@
+{
+  "_comment": "Hames 부모 하네스 훅 상대참조 (서브모듈 CWD 세션용, 2026-06-13). 훅 스크립트는 __dirname 기준으로 Hames 루트를 해석한다.",
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/../.claude/hooks/session_capture.js\"" } ] }
+    ],
+    "PreToolUse": [
+      { "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash", "hooks": [ { "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/../.claude/hooks/context_verifier.js\"" } ] },
+      { "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash", "hooks": [ { "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/../.claude/hooks/workspace_guard.js\"" } ] },
+      { "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash", "hooks": [ { "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/../Anti/.Arsenal/compliance_auditor.js\"" } ] }
+    ],
+    "PostToolUse": [
+      { "matcher": "Edit|MultiEdit", "hooks": [ { "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/../Anti/.Arsenal/verify_edit_surgery.js\"" } ] }
+    ]
+  }
+}

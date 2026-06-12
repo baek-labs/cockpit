@@ -3,7 +3,7 @@
 > A GUI control surface for **HamesSystem** — a live operational dashboard that reads system
 > state now, and (Phase 2) drives the same Claude Code / Agent SDK runtime that *is* Hames.
 >
-> Ships as a **standalone repository**, included in a Hames install as a git submodule at `cockpit/`.
+> Ships as a **standalone repository**, included in a Hames install as a git submodule at `Cockpit/`.
 > The same code runs on a personal Hames install and on the public `baek-labs/hames` template.
 
 ---
@@ -37,7 +37,7 @@ model. The cockpit is a viewer + control panel that wraps it.
 ## Architecture
 
 ```
-cockpit/
+Cockpit/
 ├─ server/        zero-dependency Node backend
 │  ├─ config.js     runtime discovery of root + state-file paths (hardcodes nothing)
 │  ├─ state.js      readers → one /api/state snapshot
