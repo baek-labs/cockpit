@@ -41,8 +41,9 @@ cockpit/
 ├─ server/        zero-dependency Node backend
 │  ├─ config.js     runtime discovery of root + state-file paths (hardcodes nothing)
 │  ├─ state.js      readers → one /api/state snapshot
-│  ├─ actions.js    safe mechanical ops + Phase-2-gated stubs
-│  └─ index.js      http server: static + /api/state + /api/action
+│  ├─ actions.js      mechanical ops (fetch/open/refresh/lock/unlock) + gated save/pull stubs
+│  ├─ orchestrator.js spawns + tracks read-only-restricted `claude` child jobs
+│  └─ index.js        http server: static + /api/state + /api/action + /api/spawn + /api/jobs
 ├─ web/           vanilla HTML/CSS/JS frontend (ShipOS aesthetic), polls /api/state
 ├─ CONTRACT.md    the build contract — the JSON seam between server and web
 └─ CLAUDE.md      this file
@@ -72,10 +73,13 @@ candidate), reads the workspace registry instead of assuming names, and the UI s
 
 ## Phases
 
-- **Phase 1 (current):** read everything + genuinely safe actions only — `git fetch`, open a
-  path in the OS. Operational buttons for lock/save/pull/spawn are shown but gated.
-- **Phase 2:** those gated actions, routed through `claude -p` / the Claude Agent SDK so the
-  Hames defense-line + workspace-guard hooks execute. The cockpit never bypasses the harness.
+- **Phase 1 (current):** reads everything + runs safe mechanical actions directly — `git fetch`,
+  open a path, refresh — **plus workspace `lock`/`unlock` and agent `spawn`** (spawn launches a
+  read-only-restricted `claude` child via `server/orchestrator.js`, tracked through `/api/jobs`).
+  `save`/`pull` remain gated.
+- **Phase 2:** route the remaining gated actions (`save`/`pull`) and richer agent work through
+  `claude -p` / the Claude Agent SDK so the Hames defense-line + workspace-guard hooks execute.
+  The cockpit never bypasses the harness.
 
 ---
 

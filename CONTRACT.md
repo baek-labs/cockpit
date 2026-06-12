@@ -126,14 +126,19 @@ Rules for the data:
 
 Request body JSON: `{ "type": "<string>", "arg": "<optional string>" }`. Response: `{ "ok": bool, ... }`.
 
-Phase-1 ENABLED actions (genuinely safe — no working-tree mutation):
+ENABLED actions:
 - `type:"git.fetch"` → `git -C ROOT fetch --all` → `{ ok, output }`.
 - `type:"open"`, `arg:"<ROOT-relative path>"` → resolve, **reject if it escapes ROOT**, then open in OS → `{ ok }`.
 - `type:"refresh"` → `{ ok:true }` (no-op; client just re-fetches state).
+- `type:"lock"`, `arg:"<workspace>"` → set the cockpit's OWN lock entry (`sessions.cockpit`) in the lock file + append a `LOCK_SET` audit row → `{ ok:true, lock:{ workspace, locked:true } }`. Does NOT force-lock other running sessions (each owns its entry).
+- `type:"unlock"` → clear the cockpit lock entry → `{ ok:true, lock:{ workspace:null, locked:false } }` + `LOCK_CLEAR` audit row.
 
-Phase-2 GATED actions (return without doing anything):
-- `type` in `lock`,`unlock`,`save`,`pull`,`spawn` → `{ ok:false, gated:true, phase:2,
-  message:"Phase 2 — routed through Claude/Agent SDK so harness hooks fire." }`.
+GATED actions (return a marker, do nothing — still SAFE MODE):
+- `type` in `save`,`pull` → `{ ok:false, gated:true, message:"requires full-autonomous mode" }`.
+
+Unknown `type` → `{ ok:false, error:"unknown action: <type>" }`.
+
+> Agent spawn is NOT an `/api/action` type — it has its own `POST /api/spawn` endpoint (§5). `lock`/`unlock` mutate the lock file directly; since harness hooks don't fire for the cockpit's own process, the cockpit honors the harness itself (it audit-logs every lock change).
 
 ---
 
@@ -141,10 +146,14 @@ Phase-2 GATED actions (return without doing anything):
 
 Zero-dep `http` server bound to `HOST:PORT`. Routes:
 - `GET /` → serve `web/index.html`.
-- `GET /style.css`, `GET /app.js` → serve from `web/` (content-type set; reject path traversal).
+- `GET /<static>` → serve any file under `web/` (content-type by extension; reject path traversal); 404 if absent.
 - `GET /api/state` → JSON snapshot from `state.js`. On error: 500 `{ error }`.
-- `POST /api/action` → parse JSON body, dispatch to `actions.js`, return JSON.
-- On start, print: `Hames Cockpit → http://127.0.0.1:<port>  (root: <ROOT>)`.
+- `POST /api/action` → parse JSON body, dispatch to `actions.js`, return JSON (§4).
+- `POST /api/spawn` → `orchestrator.spawnAgent({ agent, prompt })`: launch a read-only-restricted `claude` child (`server/orchestrator.js`), return the job descriptor.
+- `GET /api/jobs` → `{ jobs: orchestrator.getJobs() }`.
+- `GET /api/jobs/:id` → the job, or 404 `{ error:"job not found" }`.
+- `POST /api/jobs/:id/stop` → `{ ok: orchestrator.stopJob(id) }`.
+- Other methods → 405. On start, print: `Hames Cockpit → http://127.0.0.1:<port>  (root: <ROOT>)`.
 
 ---
 
@@ -165,8 +174,8 @@ Aesthetic: **ShipOS submarine command-center**. Dark, dense, professional, monos
   - Git: branch, ahead/behind, dirty files, submodule table.
   - Right rail: `sessionFeed` styled like ShipOS agent activity (tool chip, workspace tag, file path, ts).
 - Top-right controls: **LIVE toggle** (on = poll `GET /api/state` every 5s), manual **Refresh**, live clock.
-- Action buttons (call `POST /api/action`): "git fetch" + per-workspace/file "open".
-  Render gated Phase-2 buttons (lock/save/pull/spawn) **disabled** with a small `Phase 2` tag.
+- Action buttons (call `POST /api/action`): "git fetch" + per-workspace/file "open" + workspace `lock`/`unlock` (live).
+  Render only the still-gated buttons (`save`/`pull`) **disabled** with a small `gated` tag. Agent `spawn` + job control use `/api/spawn` and `/api/jobs` (§5).
 - Empty states: if `workspaceCount==0` (fresh public install) show a friendly "no workspaces yet" panel,
   never crash. Same for empty feeds.
 - Single `fetch('/api/state')`; preserve scroll on re-render. Escape every file-sourced string.
