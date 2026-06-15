@@ -83,9 +83,43 @@ function todayLocal() {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+// ---------- alive session detection ----------
+
+// Lock-file keys are session ids; `.claude/sessions/<pid>.id` maps a live host
+// PID to its session id (written by the SessionStart hook). A lock whose owning
+// process is gone is stale and must not count as an active lock. Returns a Set
+// of alive session ids, or null when the sessions dir is absent (fresh clone)
+// so callers fall back to counting every lock.
+function aliveSessionIds(root) {
+  let files;
+  const dir = path.join(root, '.claude', 'sessions');
+  try {
+    files = fs.readdirSync(dir);
+  } catch (_) {
+    return null; // cannot determine → caller keeps legacy "count all" behavior
+  }
+  const alive = new Set();
+  for (const f of files) {
+    if (!f.endsWith('.id')) continue;
+    const pid = Number(f.slice(0, -3));
+    if (!Number.isInteger(pid) || pid <= 0) continue;
+    let isAlive = false;
+    try {
+      process.kill(pid, 0); // signal 0: existence probe, sends nothing
+      isAlive = true;
+    } catch (e) {
+      isAlive = !!e && e.code === 'EPERM'; // exists but owned by another user
+    }
+    if (!isAlive) continue;
+    const sid = readText(path.join(dir, f)).trim();
+    if (sid) alive.add(sid);
+  }
+  return alive;
+}
+
 // ---------- lock file (v1 / v2) ----------
 
-function readLock(lockPath) {
+function readLock(lockPath, aliveSids) {
   const empty = { current: { name: null, locked: false }, lockedSessions: 0, lockedWorkspaces: new Set() };
   const data = readJSON(lockPath, null);
   if (!data || typeof data !== 'object') return empty;
@@ -96,16 +130,20 @@ function readLock(lockPath) {
   if (data.version === 2 && data.sessions && typeof data.sessions === 'object') {
     let current = { name: null, locked: false };
     let latest = -Infinity;
-    for (const entry of Object.values(data.sessions)) {
+    for (const [sid, entry] of Object.entries(data.sessions)) {
       if (!entry || typeof entry !== 'object') continue;
-      if (entry.locked) {
-        lockedSessions += 1;
-        if (entry.workspace) lockedWorkspaces.add(entry.workspace);
-      }
+      // Skip locks whose owning session process is gone: a stale entry would
+      // otherwise surface as the active workspace (the original "shows Youtube
+      // when Youtube isn't in use" bug). aliveSids === null means we cannot
+      // tell (no sessions dir), so keep every entry.
+      if (aliveSids && !aliveSids.has(sid)) continue;
+      if (!entry.locked) continue;
+      lockedSessions += 1;
+      if (entry.workspace) lockedWorkspaces.add(entry.workspace);
       const t = Date.parse(entry.updated_at || '');
       if (!Number.isNaN(t) && t >= latest) {
         latest = t;
-        current = { name: entry.workspace || null, locked: !!entry.locked };
+        current = { name: entry.workspace || null, locked: true };
       }
     }
     return { current, lockedSessions, lockedWorkspaces };
@@ -287,7 +325,8 @@ function buildGit(root) {
 function buildState(cfg) {
   const sessionEntries = readJSONL(cfg.sessionLog);
   const auditEntries = readJSONL(cfg.auditLog);
-  const lock = readLock(cfg.lockFile);
+  const aliveSids = aliveSessionIds(cfg.root);
+  const lock = readLock(cfg.lockFile, aliveSids);
 
   // harness aggregate over last window
   const harness = { window: HARNESS_WINDOW };
