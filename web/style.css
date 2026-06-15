@@ -748,3 +748,27 @@ body {
   .layout { grid-template-columns: 1fr; }
   .leftnav { display: none; }
 }
+
+/* ============================ HEALTH ============================ */
+.hx       { font-family: var(--mono); font-weight: 700; }
+.hx-ok    { color: var(--teal); }
+.hx-warn  { color: var(--amber); }
+.hx-fail  { color: var(--red); }
+
+.tokdetail { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; font-size: 11px; }
+.tokdetail .kv { color: var(--muted); }
+.tokdetail .kv b { color: var(--text); font-weight: 600; }
+.tok-note { flex-basis: 100%; color: var(--muted); font-size: 10.5px; margin-top: 2px; }
+
+.ichips  { display: flex; flex-wrap: wrap; gap: 8px; }
+.ichip   { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px;
+           border: 1px solid rgba(245,158,11,0.45); border-radius: 4px;
+           background: rgba(245,158,11,0.06); font-size: 11px; }
+.ichip-k { font-family: var(--mono); color: var(--amber); }
+.ichip-n { font-family: var(--mono); font-weight: 700; color: var(--text); }
+
+.riskpill { font-size: 9.5px; font-weight: 700; letter-spacing: .5px;
+            padding: 2px 8px; border-radius: 3px; text-transform: uppercase; }
+.risk-low  { color: var(--teal);  border: 1px solid rgba(52,211,153,0.4); }
+.risk-med  { color: var(--amber); border: 1px solid rgba(245,158,11,0.5); background: rgba(245,158,11,0.07); }
+.risk-high { color: var(--red);   border: 1px solid rgba(239,68,68,0.5);  background: rgba(239,68,68,0.06); }

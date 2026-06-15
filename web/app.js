@@ -16,6 +16,7 @@
     { id: "agents",     label: "Agents",     icon: "◈" },
     { id: "skills",     label: "Skills",     icon: "⚙" },
     { id: "harness",    label: "Harness",    icon: "⛨" },
+    { id: "health",     label: "Health",     icon: "✚" },
     { id: "git",        label: "Git",        icon: "⎇" },
     { id: "operations", label: "Operations", icon: "⌁" }
   ];
@@ -33,6 +34,11 @@
   var opsSelectedJob = null;  // currently focused job id
   var lockSelectValue = "";   // preserve lock-workspace <select> across re-render
   var runningJobs = 0;        // for nav badge
+
+  // Health (System Health / doctor) state
+  var healthMounted = false;  // is the Health shell currently in #main?
+  var doctorData = null;      // last successful OR error report (client cache)
+  var doctorLoading = false;  // in-flight guard for fetchDoctor
 
   // ----------------------------------------------------------------
   // Helpers
@@ -1027,6 +1033,196 @@
   }
 
   // ----------------------------------------------------------------
+  // Section: Health (System Health / doctor MRI)
+  // Separate async endpoint /api/doctor (NOT /api/state). Mounted once on
+  // entry like Operations; loads on entry + on Refresh only (no polling).
+  // ----------------------------------------------------------------
+  function mountHealth() {
+    var html =
+      '<div id="healthRoot">' +
+      viewHead("System Health", "hames_doctor MRI · system integrity & runtime",
+        '<button class="btn" data-health="refresh">⟳ Re-run /doctor</button>') +
+      '<div id="healthBody"><div class="muted" style="padding:24px 4px">running /doctor…</div></div>' +
+      '</div>';
+    byId("main").innerHTML = html;
+    var root = byId("healthRoot");
+    root.addEventListener("click", function (e) {
+      var r = e.target.closest('[data-health="refresh"]');
+      if (r) { fetchDoctor(true); }
+    });
+  }
+
+  function setHealthLoading() {
+    var el = byId("healthBody");
+    if (el) el.innerHTML = '<div class="muted" style="padding:24px 4px"><span class="spinner"></span> running /doctor…</div>';
+  }
+
+  function fetchDoctor(refresh) {
+    if (doctorLoading) return;
+    doctorLoading = true;
+    if (refresh) setHealthLoading();
+    fetch("/api/doctor" + (refresh ? "?refresh=1" : ""), { headers: { Accept: "application/json" } })
+      .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(function (rep) {
+        doctorData = rep || { ok: false, error: "empty response" };
+        if (current === "health") renderHealthBody(doctorData);
+      })
+      .catch(function (err) {
+        doctorData = { ok: false, error: String(err && err.message || err) };
+        if (current === "health") renderHealthBody(doctorData);
+      })
+      .then(function () { doctorLoading = false; });
+  }
+
+  function renderHealthBody(report) {
+    var el = byId("healthBody");
+    if (!el) return;
+    report = report || {};
+    if (report.ok === false) {
+      el.innerHTML = emptyBox("⚠", "Doctor failed", esc(report.error || "unknown error"));
+      return;
+    }
+    var rh = report.runtime_health;
+    if (!rh || typeof rh !== "object") {
+      el.innerHTML = emptyBox("✚", "No health data", "doctor returned a report without runtime_health.");
+      return;
+    }
+    var h = "";
+    h += healthGauge(rh.summary);
+    h += healthToolsPanel(arr(rh.external_tools));
+    h += healthCredsPanel(arr(rh.credentials));
+    h += healthIssuesPanel(report.issues || {});
+    h += healthActionsPanel(arr(report.recommended_actions));
+    el.innerHTML = h;
+  }
+
+  function healthIcon(status) {
+    var s = String(status || "").toLowerCase();
+    if (s === "ok")   return '<span class="hx hx-ok">✓</span>';
+    if (s === "warn") return '<span class="hx hx-warn">⚠</span>';
+    if (s === "fail") return '<span class="hx hx-fail">✗</span>';
+    return '<span class="hx">·</span>';
+  }
+
+  function healthGauge(summary) {
+    summary = summary || {};
+    var ok = summary.ok || 0, warn = summary.warn || 0, fail = summary.fail || 0;
+    var total = ok + warn + fail;
+    var pct = total ? Math.round((ok / total) * 100) : 0;
+    var color = fail ? COL.red : (warn ? COL.amber : COL.teal);
+    return '<div class="hero" style="grid-template-columns:minmax(250px,310px) 1fr">' +
+      '<div class="card"><div class="card-title">Runtime Health' +
+        '<span class="ct-aux">' + num(total) + ' checks</span></div>' +
+        '<div class="gauge">' +
+          svgDonut(
+            [{ value: ok, color: COL.teal }, { value: warn, color: COL.amber }, { value: fail, color: COL.red }],
+            { center: pct + "%", centerSub: "HEALTHY", centerColor: color, size: 144, stroke: 16 }
+          ) +
+          '<div class="leg">' +
+            legRow("var(--teal)", "OK", num(ok)) +
+            legRow("var(--amber)", "Warn", num(warn)) +
+            legRow("var(--red)", "Fail", num(fail)) +
+          '</div>' +
+        '</div></div>' +
+        healthSummaryCard(summary) +
+      '</div>';
+  }
+
+  function healthSummaryCard(summary) {
+    var et = summary.external_tools || {}, cr = summary.credentials || {};
+    return '<div class="card"><div class="card-title">Breakdown</div>' +
+      '<div class="leg" style="gap:10px">' +
+        legRow("var(--cyan)", "Tools — ok / warn / fail",
+          num(et.ok || 0) + " / " + num(et.warn || 0) + " / " + num(et.fail || 0)) +
+        legRow("var(--violet)", "Credentials — ok / warn / fail",
+          num(cr.ok || 0) + " / " + num(cr.warn || 0) + " / " + num(cr.fail || 0)) +
+      '</div></div>';
+  }
+
+  function healthToolsPanel(tools) {
+    var h = '<div class="panel section-gap"><div class="panel-title">External Tools</div>';
+    if (!tools.length) return h + '<div class="muted">No tools probed.</div></div>';
+    h += '<table class="tbl"><thead><tr><th></th><th>Tool</th><th>Req</th><th>Present</th><th>Purpose</th></tr></thead><tbody>';
+    tools.forEach(function (t) {
+      t = t || {};
+      var present = t.path ? '<span class="badge ok">PRESENT</span>' : '<span class="badge miss">MISSING</span>';
+      var req = t.required ? '<span class="badge lock">required</span>' : '<span class="badge unlock">optional</span>';
+      h += "<tr><td>" + healthIcon(t.status) + "</td>" +
+        "<td><strong title='" + esc(t.path || "") + "'>" + esc(t.name || "?") + "</strong></td>" +
+        "<td>" + req + "</td><td>" + present + "</td>" +
+        "<td class='mono'>" + esc(t.purpose || "") + "</td></tr>";
+    });
+    return h + "</tbody></table></div>";
+  }
+
+  function healthCredsPanel(creds) {
+    var h = '<div class="panel section-gap"><div class="panel-title">Credentials</div>';
+    if (!creds.length) return h + '<div class="muted">No credentials probed.</div></div>';
+    h += '<table class="tbl"><thead><tr><th></th><th>Name</th><th>Source</th><th>Detail</th></tr></thead><tbody>';
+    creds.forEach(function (c) {
+      c = c || {};
+      h += "<tr><td>" + healthIcon(c.status) + "</td>" +
+        "<td><strong>" + esc(c.name || "?") + "</strong></td>" +
+        "<td class='mono'>" + esc(c.source || "") + "</td>" +
+        "<td>" + credDetail(c.detail) + "</td></tr>";
+    });
+    return h + "</tbody></table></div>";
+  }
+
+  function credDetail(detail) {
+    if (detail && typeof detail === "object") {
+      var scopes = arr(detail.scopes).length;
+      var exp = detail.expired
+        ? '<span class="hx-fail">expired</span>'
+        : '<span class="hx-ok">valid</span>';
+      return '<div class="tokdetail">' +
+        '<span class="kv">expiry <b class="mono">' + esc(detail.expiry || "—") + '</b></span>' +
+        '<span class="kv">' + exp + '</span>' +
+        '<span class="kv">refresh <b>' + (detail.has_refresh_token ? "yes" : "no") + '</b></span>' +
+        '<span class="kv">scopes <b>' + num(scopes) + '</b></span>' +
+        (detail.note ? '<div class="tok-note">' + esc(detail.note) + '</div>' : '') +
+      '</div>';
+    }
+    return '<span class="mono muted">' + esc(detail || "") + '</span>';
+  }
+
+  function healthIssuesPanel(issues) {
+    var keys = Object.keys(issues || {});
+    var rows = "", any = false;
+    keys.forEach(function (k) {
+      var n = arr(issues[k]).length;
+      if (n > 0) {
+        any = true;
+        rows += '<span class="ichip"><span class="ichip-k">' + esc(k) + '</span>' +
+                '<span class="ichip-n">' + num(n) + '</span></span>';
+      }
+    });
+    var h = '<div class="panel section-gap"><div class="panel-title">Rule Integrity</div>';
+    if (!any) return h + '<div class="muted">규칙 무결성 0건 ✓</div></div>';
+    return h + '<div class="ichips">' + rows + '</div></div>';
+  }
+
+  function riskPill(level) {
+    var s = String(level || "").toLowerCase();
+    var cls = s === "high" ? "risk-high" : (s === "medium" ? "risk-med" : "risk-low");
+    return '<span class="riskpill ' + cls + '">' + esc(s || "low") + '</span>';
+  }
+
+  function healthActionsPanel(actions) {
+    var h = '<div class="panel section-gap"><div class="panel-title">Recommended Actions</div>';
+    if (!actions.length) return h + '<div class="muted">No recommended actions — system is clean.</div></div>';
+    h += '<table class="tbl"><thead><tr><th>Risk</th><th>Type</th><th>Target</th><th>Change</th></tr></thead><tbody>';
+    actions.forEach(function (a) {
+      a = a || {};
+      h += "<tr><td>" + riskPill(a.risk_level) + "</td>" +
+        "<td class='mono'>" + esc(a.action_type || "") + "</td>" +
+        "<td class='mono'>" + esc(a.target_path || "") + "</td>" +
+        "<td>" + esc(a.proposed_change || "") + "</td></tr>";
+    });
+    return h + "</tbody></table></div>";
+  }
+
+  // ----------------------------------------------------------------
   // Master render
   // ----------------------------------------------------------------
   var RENDERERS = {
@@ -1056,6 +1252,16 @@
         try { mountOperations(); opsMounted = true; startOpsTimers(); }
         catch (e) { mainEl.innerHTML = emptyBox("⚠", "Render error", esc(String(e && e.message || e))); }
       }
+    } else if (current === "health") {
+      // Health owns its own DOM + async fetch; mount the shell ONCE on entry and
+      // leave it untouched on subsequent /api/state polls (don't wipe #healthBody).
+      if (!healthMounted) {
+        try {
+          mountHealth(); healthMounted = true;
+          if (doctorData) renderHealthBody(doctorData); // instant repaint from cache
+          else fetchDoctor(false);                      // first entry → load once
+        } catch (e) { mainEl.innerHTML = emptyBox("⚠", "Render error", esc(String(e && e.message || e))); }
+      }
     } else {
       var fn = RENDERERS[current] || renderOverview;
       try {
@@ -1075,6 +1281,7 @@
   function setSection(id) {
     if (id === current) return;
     if (current === "operations") { stopOpsTimers(); opsMounted = false; }
+    if (current === "health") { healthMounted = false; } // no timers to stop
     current = id;
     render();
   }

@@ -12,6 +12,7 @@ const { loadConfig } = require('./config');
 const { buildState } = require('./state');
 const { handleAction } = require('./actions');
 const { createOrchestrator } = require('./orchestrator');
+const { runDoctor } = require('./doctor');
 
 const cfg = loadConfig();
 const orchestrator = createOrchestrator(cfg);
@@ -79,8 +80,9 @@ function readBody(req, limit = 1 << 20) {
 }
 
 const server = http.createServer(async (req, res) => {
-  const parsed = url.parse(req.url);
+  const parsed = url.parse(req.url, true);   // true => parsed.query object
   const pathname = parsed.pathname || '/';
+  const refresh = parsed.query && parsed.query.refresh === '1';
 
   // --- API: state ---
   if (pathname === '/api/state' && req.method === 'GET') {
@@ -88,6 +90,16 @@ const server = http.createServer(async (req, res) => {
       sendJSON(res, 200, buildState(cfg));
     } catch (err) {
       sendJSON(res, 500, { error: String((err && err.message) || err) });
+    }
+    return;
+  }
+
+  // --- API: doctor (system health MRI) ---
+  if (pathname === '/api/doctor' && req.method === 'GET') {
+    try {
+      sendJSON(res, 200, runDoctor(cfg, { refresh: refresh }));
+    } catch (err) {
+      sendJSON(res, 500, { ok: false, error: String((err && err.message) || err) });
     }
     return;
   }
