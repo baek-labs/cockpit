@@ -401,6 +401,8 @@ body {
 .badge.unlock { color: var(--muted); }
 .badge.miss   { color: var(--red); border-color: rgba(239,68,68,0.5); }
 .badge.ok     { color: var(--teal); border-color: rgba(52,211,153,0.4); }
+.badge.warn   { color: var(--amber); border-color: rgba(245,158,11,0.5); }
+.badge.mute   { color: var(--muted); }
 
 /* tables */
 .tbl { width: 100%; border-collapse: collapse; font-size: 12px; }

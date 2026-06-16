@@ -405,7 +405,6 @@
   // Section: Overview
   // ----------------------------------------------------------------
   function renderOverview(s) {
-    var ws = arr(s.workspaces);
     var k = s.kpis || {};
     var feed = arr(s.sessionFeed);
     var h = "";
@@ -471,51 +470,63 @@
 
     h += '</div>'; // .hero
 
-    // ---- Workspace activity ranked bars ----
-    h += '<div class="card"><div class="card-title">Workspace Activity' +
-      '<span class="ct-aux">by session-log actions</span></div>';
-    if (!ws.length) {
-      h += emptyBox("◇", "No workspaces yet",
-        "This looks like a fresh public install. Add a <code>workspace_paths.json</code> registry or " +
-        "<code>workspaces/*/CLAUDE.md</code> folders and they'll appear here automatically.");
-    } else {
-      var sorted = ws.slice().sort(function (a, b) { return ((b && b.actions) || 0) - ((a && a.actions) || 0); });
-      var top = sorted.slice(0, 8);
-      var maxA = (top[0] && top[0].actions) || 1;
-      h += '<div class="rbars">';
-      top.forEach(function (w) {
-        w = w || {};
-        var pct = Math.round(((w.actions || 0) / maxA) * 100);
-        var lk = w.locked ? ' <span class="lk" title="locked">🔒</span>' : "";
-        h += '<div class="rbar">' +
-          '<div class="rbar-label">' + esc(w.name || "?") + lk + '</div>' +
-          '<div class="rbar-track"><div class="rbar-fill" style="width:' + Math.max(pct, 2) + '%"></div></div>' +
-          '<div class="rbar-val">' + num(w.actions || 0) + '</div>' +
-        '</div>';
-      });
-      h += '</div>';
-      if (sorted.length > top.length)
-        h += '<div class="rbar-more">+' + num(sorted.length - top.length) + ' more in <strong>Workspaces</strong></div>';
-    }
-    h += '</div>';
+    // ---- Git Sync (per-module risk summary of the Git tab) ----
+    // One row per module: the root repo first, then every submodule. Root shows its
+    // ahead/behind/dirty vs upstream; each submodule shows its precise state — DRIFT (gitlink
+    // commit-divergence) vs DIRTY (uncommitted working-tree changes) vs UNINIT/CONFLICT — plus
+    // short SHA. Flagged submodules float to the top. Full working tree + SHAs stay in the Git tab.
+    var g = s.git || {};
+    var gDirty = arr(g.dirty);
+    var gSubs = arr(g.submodules);
+    var flagged = gSubs.filter(function (m) { return m && m.dirty; }).length;
+    var ahead = g.ahead || 0, behind = g.behind || 0;
+    var rootClean = !ahead && !behind && !gDirty.length;
+    var inSync = rootClean && !flagged;
 
-    // ---- Recent activity (compact) ----
-    var recent = feed.slice(0, 6);
-    h += '<div class="panel section-gap"><div class="panel-title">Recent Activity</div>';
-    if (!recent.length) {
-      h += '<div class="muted">No recent activity recorded.</div>';
+    h += '<div class="card"><div class="card-title">Git Sync' +
+      '<span class="ct-aux">' + esc(g.branch || "—") + " · " +
+      (inSync ? "in sync" : (flagged ? num(flagged) + " flagged" : "attention")) +
+      '</span></div>';
+
+    h += '<table class="tbl"><thead><tr><th>Module</th><th>Branch</th><th>Status</th></tr></thead><tbody>';
+
+    // root row
+    var rootStatus;
+    if (rootClean) {
+      rootStatus = "<span class='badge ok'>IN SYNC</span>";
     } else {
-      h += '<table class="tbl"><thead><tr><th>Tool</th><th>Workspace</th><th>File</th><th>When</th></tr></thead><tbody>';
-      recent.forEach(function (op) {
-        op = op || {};
-        h += "<tr><td><span class='tag " + toolClass(op.tool) + "'>" + esc(op.tool || "?") + "</span></td>" +
-          "<td>" + (op.workspace ? "<span class='tag ws'>" + esc(op.workspace) + "</span>" : "<span class='muted'>—</span>") + "</td>" +
-          "<td class='mono'>" + esc(op.file || "") + "</td>" +
-          "<td class='mono nowrap'>" + relTime(op.ts) + "</td></tr>";
-      });
-      h += "</tbody></table>";
+      var bits = [];
+      if (ahead)  bits.push("<span style='color:var(--amber)'>&uarr;" + num(ahead) + "</span>");
+      if (behind) bits.push("<span style='color:var(--red)'>&darr;" + num(behind) + "</span>");
+      if (gDirty.length) bits.push("<span style='color:var(--amber)'>" + num(gDirty.length) + " dirty</span>");
+      rootStatus = "<span class='mono'>" + bits.join(" &middot; ") + "</span>";
     }
-    h += "</div>";
+    h += "<tr><td><span class='tag ws'>root</span></td>" +
+      "<td class='mono'>" + esc(g.branch || "—") + "</td>" +
+      "<td>" + rootStatus + "</td></tr>";
+
+    // submodule rows — drifted first
+    var subsSorted = gSubs.slice().sort(function (a, b) {
+      return (b && b.dirty ? 1 : 0) - (a && a.dirty ? 1 : 0);
+    });
+    subsSorted.forEach(function (m) {
+      m = m || {};
+      var st = subBadge(m.state) +
+        (m.dirty ? " <span class='mono'>" + esc(m.sha || "") + "</span>" : "");
+      h += "<tr><td class='mono'>" + esc(m.path || "?") + "</td>" +
+        "<td class='mono'>" + esc(m.branch || "—") + "</td>" +
+        "<td>" + st + "</td></tr>";
+    });
+
+    h += "</tbody></table>";
+
+    if (!gSubs.length)
+      h += '<div class="muted" style="margin-top:8px">No submodules registered.</div>';
+
+    h += '<div class="rbar-more" data-nav="git" style="cursor:pointer">' +
+      "Full working tree &amp; submodule SHAs in <strong>Git</strong> &rsaquo;</div>";
+
+    h += '</div>';
 
     return h;
   }
@@ -737,7 +748,7 @@
         h += "<tr><td class='mono'>" + esc(m.path || "") + "</td>" +
           "<td class='mono'>" + esc(m.sha || "") + "</td>" +
           "<td class='mono'>" + esc(m.branch || "—") + "</td>" +
-          "<td>" + (m.dirty ? "<span class='badge miss'>DIRTY</span>" : "<span class='badge ok'>CLEAN</span>") + "</td></tr>";
+          "<td>" + subBadge(m.state) + "</td></tr>";
       });
       h += "</tbody></table>";
     }
@@ -758,6 +769,18 @@
 
   function gitKv(k, v) {
     return '<div class="git-kv"><span class="k">' + esc(k) + '</span><span class="v">' + v + "</span></div>";
+  }
+
+  // submodule state -> badge. drift = gitlink commit-divergence (red); dirty = uncommitted
+  // working-tree changes (amber); uninit = not initialized (muted); conflict = merge conflict.
+  function subBadge(state) {
+    switch (state) {
+      case "drift":    return "<span class='badge miss'>DRIFT</span>";
+      case "dirty":    return "<span class='badge warn'>DIRTY</span>";
+      case "uninit":   return "<span class='badge mute'>UNINIT</span>";
+      case "conflict": return "<span class='badge miss'>CONFLICT</span>";
+      default:         return "<span class='badge ok'>CLEAN</span>";
+    }
   }
 
   function gatedBtn(type) {

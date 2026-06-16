@@ -99,7 +99,7 @@ on any read/parse error return a safe empty default.
   "git": {
     "branch": "main", "ahead": 0, "behind": 0,
     "dirty": [ { "status": "??", "file": "..." } ],
-    "submodules": [ { "path": "Sales/AI_Business", "sha": "e32e30c", "branch": "main", "dirty": false } ]
+    "submodules": [ { "path": "Sales/AI_Business", "sha": "e32e30c", "branch": "main", "dirty": false, "state": "clean" } ]
   },
   "sessionFeed": [ { "ts": "2026-06-05 11:31:56", "tool": "Write", "workspace": "BUSINESS", "file": "..." } ],
   "auditFeed":   [ { "ts": "2026-06-05T11:35:31.595Z", "hook": "context_verifier", "result": "PASS", "tool": "Bash" } ],
@@ -116,7 +116,11 @@ Rules for the data:
   If registry is `null`, fall back to scanning `workspaces/*` subdirs that contain `CLAUDE.md`.
 - agent level: filename without `_` (e.g. `cto.md`) → level1; with `_` (e.g. `cto_coder.md`) → level2.
 - `git`: shell out via `git -C <ROOT> ...` with `execFileSync`, short timeout, catch all errors
-  (a fresh clone may have no upstream → `ahead/behind` = 0). `submodules` from `git submodule status`.
+  (a fresh clone may have no upstream → `ahead/behind` = 0). `submodules` from `git submodule status`;
+  each submodule's `state` is derived with NO extra git calls by combining that flag with the root
+  `git status` paths already collected: `drift` (`+` = checked-out commit ≠ recorded gitlink),
+  `uninit` (`-`), `conflict` (`U`), else `dirty` if the submodule path appears in the root
+  working-tree changes (uncommitted/untracked content), else `clean`. `dirty` = `state !== "clean"`.
 - `handoffs`: best-effort glob of `Anti/999_AI_Communication/_Inbox/*.md` excluding `*TEMPLATE*`,
   `_Index`, `CLAUDE`, `_Master`. Empty array if the dir is absent.
 
@@ -166,7 +170,7 @@ Aesthetic: **ShipOS submarine command-center**. Dark, dense, professional, monos
 - Layout: **top KPI bar** (chips from `kpis`) + **left nav** (sections) + **center main**
   + **right rail "Live Operations"** feed (always visible, from `sessionFeed`).
 - Left-nav sections (switch center view): `Overview`, `Workspaces`, `Agents`, `Skills`, `Harness`, `Git`.
-  - Overview: KPI summary + workspaces-as-"programs" cards (activity bar from `actions`, lock badge) + recent activity.
+  - Overview: KPI summary + hero cards (Harness Health gauge, Activity chart, Tool Mix) + a **Git Sync** card — a per-module table (root row with ahead/behind/dirty, then one row per submodule showing its precise `state` badge — DRIFT/DIRTY/UNINIT/CONFLICT/CLEAN — + branch, flagged first), a risk summary of the `Git` tab (sourced from `git`); links to the `Git` section for the full working tree + submodule SHAs.
   - Workspaces: table/cards — name, path, actions, lastActivity, lock badge, exists state.
   - Agents: Level-1 and Level-2 grouped grid, each card name + description.
   - Skills: list, name + description.

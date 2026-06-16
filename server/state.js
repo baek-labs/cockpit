@@ -304,15 +304,33 @@ function buildGit(root) {
   } catch (_) { /* leave empty */ }
 
   try {
+    // The root `git status` (above) already lists a submodule by its path when its working tree
+    // is dirty / has untracked content — so we get the in-submodule "dirty" signal for FREE,
+    // with NO per-submodule git calls. `git submodule status` only flags gitlink commit-
+    // divergence ('+'), init ('-'), conflict ('U'); the two sources combine into one state:
+    //   drift    — checked-out commit != recorded gitlink (committed but not synced)
+    //   dirty    — HEAD matches gitlink but the working tree has uncommitted/untracked changes
+    //   uninit   — submodule not initialized
+    //   conflict — merge conflicts
+    //   clean    — at the recorded commit, nothing changed
+    const rootDirty = new Set(result.dirty.map((d) => d.file));
     const out = git(root, ['submodule', 'status']);
     result.submodules = out.split(/\r?\n/).filter(Boolean).map((line) => {
       const m = line.match(/^([ +\-U])([0-9a-fA-F]+)\s+(\S+)(?:\s+\((.+)\))?/);
       if (!m) return null;
+      const flag = m[1], pth = m[3];
+      let state;
+      if (flag === '+') state = 'drift';
+      else if (flag === '-') state = 'uninit';
+      else if (flag === 'U') state = 'conflict';
+      else if (rootDirty.has(pth)) state = 'dirty';
+      else state = 'clean';
       return {
-        path: m[3],
+        path: pth,
         sha: m[2].slice(0, 7),
         branch: (m[4] || '').replace(/^heads\//, ''),
-        dirty: m[1] !== ' ',
+        dirty: state !== 'clean',
+        state: state,
       };
     }).filter(Boolean);
   } catch (_) { /* leave empty */ }
