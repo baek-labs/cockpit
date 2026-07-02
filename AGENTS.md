@@ -1,31 +1,21 @@
-# Cockpit — Codex Lite Entry
+# Cockpit/AGENTS.md - Codex Redirect
 
-This file is the lightweight Codex entry for Hames Cockpit.
+This file is intentionally thin.
 
-`AGENTS.md` is the Codex default contract. `CLAUDE.md` is the Claude / Full Hames source of truth and is not loaded automatically.
+For work in this folder, read CLAUDE.md in this same folder and follow it as the local source of truth.
 
-## Default Mode
+Use the local CLAUDE.md first for:
 
-* Work on the current task.
-* Read only files directly relevant to the requested change.
-* Prefer minimal diffs.
-* Do not automatically load local `CLAUDE.md`, `CONTRACT.md`, or full project architecture.
+- folder purpose and directory map
+- important paths and output locations
+- verification commands
+- local safety rules
 
-## When to Read `CLAUDE.md`
+Scope rules:
 
-Read `CLAUDE.md` only when the task involves:
+- Stay inside this folder unless the user asks for a wider change.
+- Do not load parent/root Hames governance just because this file redirects to CLAUDE.md.
+- Do not modify parent gitlinks, sibling submodules, or unrelated workspaces unless explicitly requested.
+- Preserve unrelated local changes.
 
-* Cockpit architecture or phase rules
-* server/web contract behavior
-* binding, safety, or deployment behavior
-* repository-wide refactoring
-* explicit Full Hames Mode
-
-Read `CONTRACT.md` only when the task changes the server/web JSON seam.
-
-## Safety
-
-* Ask before destructive operations.
-* Preserve unrelated local changes.
-* Do not expose local services beyond approved bindings.
-* Verify the repository root before commit or push; do not confuse this repo with the parent Hames gitlink.
+Escalate to Full Hames Mode only when the user explicitly requests it.

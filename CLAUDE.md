@@ -8,18 +8,6 @@
 
 ---
 
-## Run
-
-```bash
-node server/index.js          # → http://127.0.0.1:8765
-# optional overrides:
-HAMES_ROOT=/path/to/hames HAMES_COCKPIT_PORT=8765 node server/index.js
-```
-
-No build step. No `npm install`. Node.js 18+ only.
-
----
-
 ## What it is
 
 The cockpit visualizes and (incrementally) operates a HamesSystem install:
@@ -68,6 +56,18 @@ A personal install and the public template differ:
 So `config.js` **discovers** the root and every state-file path at runtime (first-existing
 candidate), reads the workspace registry instead of assuming names, and the UI shows graceful
 "no data yet" states on a fresh install. One codebase, both deployments.
+
+---
+
+## Run
+
+```bash
+node server/index.js          # → http://127.0.0.1:8765
+# optional overrides:
+HAMES_ROOT=/path/to/hames HAMES_COCKPIT_PORT=8765 node server/index.js
+```
+
+No build step. No `npm install`. Node.js 18+ only.
 
 ---
 
