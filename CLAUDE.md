@@ -1,14 +1,6 @@
 # Hames Cockpit
 
-> A GUI control surface for **HamesSystem** — a live operational dashboard that reads system
-> state now, and (Phase 2) drives the same Claude Code / Agent SDK runtime that *is* Hames.
->
-> Ships as a **standalone repository**, included in a Hames install as a git submodule at `Cockpit/`.
-> The same code runs on a personal Hames install and on the public `baek-labs/hames` template.
-
----
-
-## What it is
+## Folder Purpose
 
 The cockpit visualizes and (incrementally) operates a HamesSystem install:
 
@@ -20,9 +12,10 @@ The cockpit visualizes and (incrementally) operates a HamesSystem install:
 It is **not** a reimplementation of Hames. The "brain" (COO routing, agent teams) stays in the
 model. The cockpit is a viewer + control panel that wraps it.
 
----
+Ships as a **standalone repository**, included in a Hames install as a git submodule at `Cockpit/`.
+The same code runs on a personal Hames install and on the public `baek-labs/hames` template.
 
-## Architecture
+## Directory Map / Important Paths
 
 ```
 Cockpit/
@@ -40,7 +33,21 @@ Cockpit/
 The `/api/state` JSON shape in `CONTRACT.md` §3 is the contract between backend and frontend.
 Change it in both places or not at all.
 
----
+## Run And Verify
+
+```bash
+node server/index.js          # → http://127.0.0.1:8765
+# optional overrides:
+HAMES_ROOT=/path/to/hames HAMES_COCKPIT_PORT=8765 node server/index.js
+```
+
+No build step. No `npm install`. Node.js 18+ only.
+
+## Outputs And State
+
+- `/api/state` is the frontend/backend state contract defined in `CONTRACT.md`.
+- `/api/jobs` tracks read-only-restricted `claude` child jobs spawned by `server/orchestrator.js`.
+- Runtime paths are discovered by `server/config.js`; do not hardcode a personal Hames path.
 
 ## Portability — why nothing is hardcoded
 
@@ -57,32 +64,6 @@ So `config.js` **discovers** the root and every state-file path at runtime (firs
 candidate), reads the workspace registry instead of assuming names, and the UI shows graceful
 "no data yet" states on a fresh install. One codebase, both deployments.
 
----
-
-## Run
-
-```bash
-node server/index.js          # → http://127.0.0.1:8765
-# optional overrides:
-HAMES_ROOT=/path/to/hames HAMES_COCKPIT_PORT=8765 node server/index.js
-```
-
-No build step. No `npm install`. Node.js 18+ only.
-
----
-
-## Phases
-
-- **Phase 1 (current):** reads everything + runs safe mechanical actions directly — `git fetch`,
-  open a path, refresh — **plus workspace `lock`/`unlock` and agent `spawn`** (spawn launches a
-  read-only-restricted `claude` child via `server/orchestrator.js`, tracked through `/api/jobs`).
-  `save`/`pull` remain gated.
-- **Phase 2:** route the remaining gated actions (`save`/`pull`) and richer agent work through
-  `claude -p` / the Claude Agent SDK so the Hames defense-line + workspace-guard hooks execute.
-  The cockpit never bypasses the harness.
-
----
-
 ## Safety rules (do not break)
 
 - Bind **`127.0.0.1` only**. Never expose on `0.0.0.0`.
@@ -93,7 +74,15 @@ No build step. No `npm install`. Node.js 18+ only.
   child processes, so the cockpit enforces these itself.
 - Cross-platform: pick the OS opener (`open` / `start` / `xdg-open`) via `process.platform`.
 
----
+## Phases
+
+- **Phase 1 (current):** reads everything + runs safe mechanical actions directly — `git fetch`,
+  open a path, refresh — **plus workspace `lock`/`unlock` and agent `spawn`** (spawn launches a
+  read-only-restricted `claude` child via `server/orchestrator.js`, tracked through `/api/jobs`).
+  `save`/`pull` remain gated.
+- **Phase 2:** route the remaining gated actions (`save`/`pull`) and richer agent work through
+  `claude -p` / the Claude Agent SDK so the Hames defense-line + workspace-guard hooks execute.
+  The cockpit never bypasses the harness.
 
 ## Status
 
