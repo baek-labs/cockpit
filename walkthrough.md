@@ -85,7 +85,7 @@ Hames Cockpit → http://127.0.0.1:8799  (root: /Users/james/.gemini/Hames)
 추가 sanity 확인:
 
 ```
-top-level keys: ['schema_version', 'scope', 'issues', 'documentation_drift_warnings', 'recommended_actions', 'runtime_health', 'stale_permissions', 'arsenal_issues', 'rule_module_issues', 'workspace_isolation_issues', 'runtime_encoding_issues']
+top-level keys: ['schema_version', 'scope', 'issues', 'recommended_actions', 'runtime_health', 'stale_permissions', 'arsenal_issues', 'rule_module_issues', 'workspace_isolation_issues', 'runtime_encoding_issues']
 issues keys count: 13
 recommended_actions count: 0
 ```

@@ -48,9 +48,9 @@ Export a single `loadConfig()` returning an object with all resolved absolute pa
   `{"ts":"2026-06-04 14:23:17","tool":"Edit","workspace":"ROOT","file":"Sales/AI_Business/..."}`
   (note: `ts` is space-separated local time, NOT ISO.)
 - **audit log** (`workspace_audit.log`), one JSON per line:
-  `{"ts":"2026-06-05T11:35:31.595Z","hook":"context_verifier","result":"PASS","tool":"Bash"}`
+  `{"ts":"2026-06-05T11:35:31.595Z","hook":"workspace_guard","result":"PASS","tool":"Bash"}`
   Known `result` values: `PASS`, `BLOCKED`, `BYPASS`, `ALLOWED`, `ALLOWED_SYSADMIN`,
-  `SKIPPED_SUBAGENT`, `SKIPPED_NO_TRANSCRIPT`, `SKIPPED_DISABLED`, `GRACE_FIRSTCALL`, `DEBUG_CV`.
+  `SKIPPED_SUBAGENT`, `SKIPPED_DISABLED`.
 - **lock file** (`.workspace_lock`) — TWO possible shapes, support both:
   - v2: `{"version":2,"sessions":{"<id>":{"workspace":"BUSINESS"|null,"locked":bool,"updated_at":ISO}}}`
   - v1: `{"workspace":"Youtube"|null,"locked":bool}`
@@ -102,7 +102,7 @@ on any read/parse error return a safe empty default.
     "submodules": [ { "path": "Sales/AI_Business", "sha": "e32e30c", "branch": "main", "dirty": false, "state": "clean" } ]
   },
   "sessionFeed": [ { "ts": "2026-06-05 11:31:56", "tool": "Write", "workspace": "BUSINESS", "file": "..." } ],
-  "auditFeed":   [ { "ts": "2026-06-05T11:35:31.595Z", "hook": "context_verifier", "result": "PASS", "tool": "Bash" } ],
+  "auditFeed":   [ { "ts": "2026-06-05T11:35:31.595Z", "hook": "workspace_guard", "result": "PASS", "tool": "Bash" } ],
   "handoffs": [ { "name": "...", "path": "...", "mtime": "<ISO>" } ]
 }
 ```

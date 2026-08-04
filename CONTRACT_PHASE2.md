@@ -31,8 +31,8 @@ These rules OVERRIDE anything below that conflicts. The CEO selected **safe / ad
 
 - Spawned runs use `claude -p ... --dangerously-skip-permissions`. That flag only bypasses the
   *interactive permission prompts* (which cannot be answered in headless mode). **The Hames hooks
-  still fire** for the spawned process — defense lines (context_verifier), workspace_guard, and
-  compliance_auditor all run. So a spawned agent is **autonomous but harness-governed**.
+  still fire** for the spawned process — workspace_guard and compliance_auditor run. So a spawned
+  agent is **autonomous but harness-governed**.
 - Spawns run with `cwd = ROOT` (the Hames install), so they inherit `CLAUDE.md` + hooks.
 - Agent spawns are **advisory by default** (read + reason + report). The agent may act if the
   task requires it, but the prompt steers toward analysis unless told otherwise.
