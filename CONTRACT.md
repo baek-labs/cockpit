@@ -28,11 +28,11 @@ Detect by first-existing candidate (relative to ROOT):
 | Thing | Candidates (in order) | If none exist |
 |---|---|---|
 | arsenalDir | `Anti/.Arsenal`, `arsenal`, `.Arsenal` | `null` |
-| sessionLog | `<arsenalDir>/.session_log.jsonl`, `.session_log.jsonl`, `.claude/.session_log.jsonl` | first candidate (for display) |
-| auditLog | `.claude/workspace_audit.log` | that path |
-| lockFile | `.claude/.workspace_lock` | that path |
+| logDir | `HAMES_LOG_DIR` if set; else macOS `~/Library/Logs/Hames`, Windows `%LOCALAPPDATA%/Hames/Logs`, Linux `${XDG_STATE_HOME:-~/.local/state}/hames/logs` (same rule as `Anti/.Arsenal/log_rotation.js`) | that path |
+| sessionLog | `<logDir>/session_log.jsonl` | that path (missing file → 0 / empty list) |
+| auditLog | `<logDir>/workspace_audit.log` | that path (missing file → 0 / empty list) |
+| claudeProjectDir | `<os.homedir()>/.claude/projects/<ROOT with every non-alphanumeric char replaced by '-'>` | that path |
 | registry | `.claude/workspace_paths.json` | `null` (empty registry) |
-| agentsDir | `.claude/agents` | `null` |
 | commandsDir | `.claude/commands` | `null` |
 
 Platform opener: `darwin`→`open`, `win32`→`cmd /c start ""`, else `xdg-open`.
@@ -44,20 +44,18 @@ Export a single `loadConfig()` returning an object with all resolved absolute pa
 
 ## 2. Real data formats (ground truth — verified on this machine)
 
-- **session log** (`.session_log.jsonl`), one JSON per line:
+- **session log** (`session_log.jsonl`), one JSON per line:
   `{"ts":"2026-06-04 14:23:17","tool":"Edit","workspace":"ROOT","file":"Sales/AI_Business/..."}`
   (note: `ts` is space-separated local time, NOT ISO.)
 - **audit log** (`workspace_audit.log`), one JSON per line:
   `{"ts":"2026-06-05T11:35:31.595Z","hook":"workspace_guard","result":"PASS","tool":"Bash"}`
   Known `result` values: `PASS`, `BLOCKED`, `BYPASS`, `ALLOWED`, `ALLOWED_SYSADMIN`,
   `SKIPPED_SUBAGENT`, `SKIPPED_DISABLED`.
-- **lock file** (`.workspace_lock`) — TWO possible shapes, support both:
-  - v2: `{"version":2,"sessions":{"<id>":{"workspace":"BUSINESS"|null,"locked":bool,"updated_at":ISO}}}`
-  - v1: `{"workspace":"Youtube"|null,"locked":bool}`
-  For v2, `current` = the session entry with the latest `updated_at`.
+- **Claude Code subagent records** (`<claudeProjectDir>/<session>/subagents/agent-*.meta.json` + the
+  same-named `agent-*.jsonl`). Read only the meta fields `description`, `agentType`, `finished` and the
+  `.jsonl` modification time. Never read transcript contents. (Hames removed the workspace lock
+  2026-11-11; the cockpit no longer reads or writes a lock file.)
 - **registry** (`workspace_paths.json`): `{"INVEST":"Anti/00_Investment", ...}` (name → ROOT-relative path).
-- **agent file** (`.claude/agents/*.md`) frontmatter: `--- \n name: CTO \n description: ... \n ---`
-  (`name` may be absent → derive from filename without `.md`.)
 - **skill file** (`.claude/commands/*.md`) frontmatter: `--- \n description: ... \n ---`.
 
 Big files: read whole + split + slice last N (audit log ~1 MB, fine). Never throw to the caller;
@@ -75,13 +73,14 @@ on any read/parse error return a safe empty default.
   "dataSources": {
     "sessionLog": { "path": "<abspath>", "exists": true },
     "auditLog":   { "path": "<abspath>", "exists": true },
-    "lock":       { "path": "<abspath>", "exists": true },
+    "claudeSubagents": { "path": "<abspath>", "exists": true },
     "registry":   { "path": "<abspath>", "exists": true }
   },
   "kpis": {
-    "activeWorkspace": { "name": "BUSINESS", "locked": true },
+    "lastWorkspace": { "name": "BUSINESS" },
     "workspaceCount": 16,
-    "lockedSessions": 12,
+    "recentSubagentCalls": 3,
+    "runningSubagents": 0,
     "actionsToday": 7,
     "harness": { "PASS": 480, "BLOCKED": 12, "BYPASS": 1, "window": 500 },
     "submodules": { "total": 9, "dirty": 0 },
@@ -89,12 +88,11 @@ on any read/parse error return a safe empty default.
   },
   "workspaces": [
     { "name": "BUSINESS", "path": "Anti/01_Business", "exists": true,
-      "actions": 134, "lastActivity": "2026-06-05 11:31:56", "locked": true }
+      "actions": 134, "lastActivity": "2026-06-05 11:31:56" }
   ],
-  "agents": {
-    "level1": [ { "name": "CTO", "file": "cto.md", "description": "..." } ],
-    "level2": [ { "name": "cto_coder", "file": "cto_coder.md", "description": "..." } ]
-  },
+  "subagents": [
+    { "description": "Review draft", "agentType": "general-purpose", "running": false, "finished": true, "status": "done", "updatedAt": "<ISO>" }
+  ],
   "skills": [ { "name": "save", "description": "..." } ],
   "git": {
     "branch": "main", "ahead": 0, "behind": 0,
@@ -112,9 +110,21 @@ Rules for the data:
 - `harness`: aggregate `result` counts over the last `window` (=500) audit entries.
 - `kpis.actionsToday`: session-log entries whose `ts` date == today (local).
 - `workspaces`: built from registry; per workspace derive `actions` (count in session log where
-  `workspace` matches the NAME) and `lastActivity` (latest such `ts`); `locked` from lock file.
+  `workspace` matches the NAME) and `lastActivity` (latest such `ts`).
   If registry is `null`, fall back to scanning `workspaces/*` subdirs that contain `CLAUDE.md`.
-- agent level: filename without `_` (e.g. `cto.md`) → level1; with `_` (e.g. `cto_coder.md`) → level2.
+- `kpis.lastWorkspace.name`: `workspace` of the newest session-log entry that has one (`null` if none). It is the last used workspace, not a live session (the lock-based `activeWorkspace` was removed with the lock).
+- `subagents`: records whose `.jsonl` changed within the last 24 h, newest first, at most 12
+  (`COCKPIT_SUBAGENT_WINDOW_MS`, `COCKPIT_SUBAGENT_LIMIT` override). `finished` = meta `finished === true`.
+  `status` is `done` when finished, `running` when not finished AND the `.jsonl` changed within the last
+  5 min (`COCKPIT_SUBAGENT_RUNNING_MS`), otherwise `stale` (no finish record and no recent update — shown
+  as "확인 필요", never as done). `running` = `status === "running"`.
+  `updatedAt` = that modification time. `kpis.recentSubagentCalls` = count within 24 h before the 12 cap.
+  `kpis.runningSubagents` = count of `running` records within 24 h, also before the cap; the main avatar
+  lights from this value so a running call outside the 12 shown still lights it.
+- `dataSources.claudeSubagents.exists` is `true` when at least one `<session>/subagents` folder exists
+  under `claudeProjectDir`; `path` = `claudeProjectDir`.
+- Scope: Claude Code sessions started at the Hames root only. Codex subagents and sessions started in
+  other folders are not shown. Tested on macOS only; Windows and Linux behavior is untested.
 - `git`: shell out via `git -C <ROOT> ...` with `execFileSync`, short timeout, catch all errors
   (a fresh clone may have no upstream → `ahead/behind` = 0). `submodules` from `git submodule status`;
   each submodule's `state` is derived with NO extra git calls by combining that flag with the root
@@ -134,15 +144,13 @@ ENABLED actions:
 - `type:"git.fetch"` → `git -C ROOT fetch --all` → `{ ok, output }`.
 - `type:"open"`, `arg:"<ROOT-relative path>"` → resolve, **reject if it escapes ROOT**, then open in OS → `{ ok }`.
 - `type:"refresh"` → `{ ok:true }` (no-op; client just re-fetches state).
-- `type:"lock"`, `arg:"<workspace>"` → set the cockpit's OWN lock entry (`sessions.cockpit`) in the lock file + append a `LOCK_SET` audit row → `{ ok:true, lock:{ workspace, locked:true } }`. Does NOT force-lock other running sessions (each owns its entry).
-- `type:"unlock"` → clear the cockpit lock entry → `{ ok:true, lock:{ workspace:null, locked:false } }` + `LOCK_CLEAR` audit row.
 
 GATED actions (return a marker, do nothing — still SAFE MODE):
 - `type` in `save`,`pull` → `{ ok:false, gated:true, message:"requires full-autonomous mode" }`.
 
 Unknown `type` → `{ ok:false, error:"unknown action: <type>" }`.
 
-> Agent spawn is NOT an `/api/action` type — it has its own `POST /api/spawn` endpoint (§5). `lock`/`unlock` mutate the lock file directly; since harness hooks don't fire for the cockpit's own process, the cockpit honors the harness itself (it audit-logs every lock change).
+> Agent spawn is NOT an `/api/action` type — it has its own `POST /api/spawn` endpoint (§5). The cockpit only reads the harness logs; it never writes to them.
 
 ---
 
@@ -153,7 +161,7 @@ Zero-dep `http` server bound to `HOST:PORT`. Routes:
 - `GET /<static>` → serve any file under `web/` (content-type by extension; reject path traversal); 404 if absent.
 - `GET /api/state` → JSON snapshot from `state.js`. On error: 500 `{ error }`.
 - `POST /api/action` → parse JSON body, dispatch to `actions.js`, return JSON (§4).
-- `POST /api/spawn` → `orchestrator.spawnAgent({ agent, prompt })`: launch a read-only-restricted `claude` child (`server/orchestrator.js`), return the job descriptor.
+- `POST /api/spawn` → `orchestrator.spawnAgent({ prompt })`: launch a read-only-restricted `claude` child (`server/orchestrator.js`) as the main Hames agent, return the job descriptor. An `agent` field in the body is ignored; every job's `agent` and `label` are `"Hames"`.
 - `GET /api/jobs` → `{ jobs: orchestrator.getJobs() }`.
 - `GET /api/jobs/:id` → the job, or 404 `{ error:"job not found" }`.
 - `POST /api/jobs/:id/stop` → `{ ok: orchestrator.stopJob(id) }`.
@@ -169,17 +177,23 @@ Aesthetic: **ShipOS submarine command-center**. Dark, dense, professional, monos
   warn amber `#f59e0b`, alert red `#ef4444`. Numbers in `ui-monospace, "SF Mono", Menlo`.
 - Layout: **top KPI bar** (chips from `kpis`) + **left nav** (sections) + **center main**
   + **right rail "Live Operations"** feed (always visible, from `sessionFeed`).
-- Left-nav sections (switch center view): `Overview`, `Workspaces`, `Agents`, `Skills`, `Harness`, `Git`.
+- Left-nav sections (switch center view): `Overview`, `Workspaces`, `Skills`, `Harness`, `Git`.
   - Overview: KPI summary + hero cards (Harness Health gauge, Activity chart, Tool Mix) + a **Git Sync** card — a per-module table (root row with ahead/behind/dirty, then one row per submodule showing its precise `state` badge — DRIFT/DIRTY/UNINIT/CONFLICT/CLEAN — + branch, flagged first), a risk summary of the `Git` tab (sourced from `git`); links to the `Git` section for the full working tree + submodule SHAs.
-  - Workspaces: table/cards — name, path, actions, lastActivity, lock badge, exists state.
-  - Agents: Level-1 and Level-2 grouped grid, each card name + description.
+  - Workspaces: table/cards — name, path, actions, lastActivity, exists state.
   - Skills: list, name + description.
   - Harness: PASS/BLOCKED/BYPASS bars from `kpis.harness` + `auditFeed` list (color by result).
   - Git: branch, ahead/behind, dirty files, submodule table.
   - Right rail: `sessionFeed` styled like ShipOS agent activity (tool chip, workspace tag, file path, ts).
 - Top-right controls: **LIVE toggle** (on = poll `GET /api/state` every 5s), manual **Refresh**, live clock.
-- Action buttons (call `POST /api/action`): "git fetch" + per-workspace/file "open" + workspace `lock`/`unlock` (live).
+- Action buttons (call `POST /api/action`): "git fetch" + per-workspace/file "open".
   Render only the still-gated buttons (`save`/`pull`) **disabled** with a small `gated` tag. Agent `spawn` + job control use `/api/spawn` and `/api/jobs` (§5).
+- Virtual office (`web/office.html`): the main "Hames" avatar first, then one avatar per entry in
+  `subagents` (name seed and caption = `description`; one color for main, one for subagents). A
+  running subagent lights the `dot run` indicator; the main avatar lights when any subagent is running.
+  The left roster lists the same members. Empty states: `claudeSubagents.exists:false` → "Claude Code
+  기록을 찾지 못함"; `exists:true` with no entries → "최근 서브 호출 없음". The page notes that only
+  Claude Code subagent calls from sessions started at the Hames root are shown (Codex excluded).
+  KPI card: "최근 서브 호출 수" = `kpis.recentSubagentCalls`.
 - Empty states: if `workspaceCount==0` (fresh public install) show a friendly "no workspaces yet" panel,
   never crash. Same for empty feeds.
 - Single `fetch('/api/state')`; preserve scroll on re-render. Escape every file-sourced string.

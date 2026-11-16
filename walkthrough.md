@@ -1,5 +1,38 @@
 # Cockpit Walkthrough
 
+## 2026-11-16 — 역할 에이전트·잠금 제거, 가상 사무실을 서브 호출 화면으로 전환
+
+Hames가 16개 역할 에이전트 구조를 없애고 "메인 + 범용 서브 에이전트"로 바뀌었다. 워크스페이스 잠금은 2026-11-11에 이미 없어졌다. Cockpit도 여기에 맞췄다.
+
+### 바꾼 것
+
+- **`server/orchestrator.js`:** 역할별 자문 프롬프트와 역할 목록을 지웠다. 모든 작업은 메인 Hames로 실행하고, 작업 기록의 `agent`·`label`은 `"Hames"`다.
+- **`server/index.js`:** `/api/spawn`은 `{prompt}`만 쓴다. `agent` 필드가 와도 무시한다.
+- **`server/actions.js`:** `lock`·`unlock` 액션과 잠금 파일 쓰기, 감사 로그 쓰기(`appendAudit`)를 지웠다. Cockpit은 하네스 기록을 읽기만 한다.
+- **`server/config.js`:** 기록 위치를 `Anti/.Arsenal/log_rotation.js`와 같은 규칙으로 찾는다(`HAMES_LOG_DIR`, 없으면 macOS `~/Library/Logs/Hames/`). Claude Code 프로젝트 기록 폴더(`~/.claude/projects/<ROOT를 바꾼 이름>`)를 찾는다.
+- **`server/state.js`:** `/api/state`의 `agents`를 `subagents`(최근 24시간, 최대 12개, 최신순)로 바꿨다. 메타 파일의 `description`·`agentType`·`finished`와 기록 파일 수정 시각만 읽고 대화 본문은 읽지 않는다. 상태는 셋이다: `finished`가 `true`면 완료, 아니고 5분 안에 기록이 바뀌었으면 진행 중, 둘 다 아니면 `stale`(화면 "확인 필요") — 완료 기록이 없는 서브를 완료로 단정하지 않는다. `kpis.recentSubagentCalls`와 `dataSources.claudeSubagents`를 더했고 잠금 필드를 모두 지웠다. 잠금 기반 `activeWorkspace`는 지우고, 가장 최근 세션 기록의 워크스페이스를 `kpis.lastWorkspace`로 둔다(화면 표시 "Last Workspace").
+- **`web/office.html`:** 가운데에 메인 Hames, 그 뒤에 최근 서브 에이전트를 아바타로 늘어놓는다. 진행 중이면 불이 켜지고, 서브가 하나라도 진행 중이면 메인도 켜진다. "Hames 루트에서 시작한 Claude Code 세션의 서브 호출만 표시합니다(Codex·LLM_Wiki·Study 세션 제외)." 안내를 넣었다. KPI는 "최근 서브 호출 수"로 바꿨다.
+- **`web/app.js`:** Agents 메뉴와 역할 색상표, Operations의 역할 선택, Lock/Unlock 버튼과 잠금 표시를 지웠다.
+- **규칙 점검 숫자:** 새 감사 기록은 통과를 `ALLOWED`로 남기므로 통과 수에 `PASS`와 `ALLOWED`를 함께 센다.
+
+### 검증 (예시 값은 자리표시자)
+
+```
+$ PATH=/tmp/<임시>/fakebin:$PATH node server/index.js
+Hames Cockpit → http://127.0.0.1:8765  (root: <HAMES_ROOT>)
+GET /api/state → keys: auditFeed, dataSources, generatedAt, git, handoffs, kpis, platform, root, sessionFeed, skills, subagents, workspaces
+  agents 없음 · kpis.lockedSessions 없음 · dataSources.lock 없음
+  dataSources.sessionLog = <HOME>/Library/Logs/Hames/session_log.jsonl (exists)
+  dataSources.claudeSubagents = <HOME>/.claude/projects/<PROJECT_KEY> (exists)
+POST /api/spawn {"agent":"CFO","prompt":"테스트"} → {"ok":true,"jobId":"job_..."}
+GET /api/jobs → agent "Hames", label "Hames"
+POST /api/jobs/<id>/stop → {"ok":true}
+POST /api/action {"type":"lock"} → {"ok":false,"error":"unknown action: lock"}
+GET /office.html 200 · GET /index.html 200
+```
+
+가짜 `claude`(아무것도 하지 않고 끝나는 실행 파일)로 시험해 실제 모델은 부르지 않았다. macOS에서만 시험했고 Windows·Linux 동작은 시험하지 않았다.
+
 ## 2026-06-15 — Health 페이지 구현 (hames_doctor MRI)
 
 Cockpit에 시스템 건강 상태(System Health) 페이지를 추가한다. 별도 비동기 엔드포인트 `/api/doctor`로
@@ -57,7 +90,7 @@ OK app.js
 ```
 PID=50960
 --- server startup log ---
-Hames Cockpit → http://127.0.0.1:8799  (root: /Users/james/.gemini/Hames)
+Hames Cockpit → http://127.0.0.1:8799  (root: <HAMES_ROOT>)
 ```
 
 #### curl /api/doctor — runtime_health.summary
@@ -95,7 +128,7 @@ recommended_actions count: 0
 #### curl /api/state — Phase 1 정상 (head 200바이트)
 
 ```
-{"generatedAt":"2026-06-14T20:47:09.623Z","root":"/Users/james/.gemini/Hames","platform":"darwin","dataSources":{"sessionLog":{"path":"/Users/james/.gemini/Hames/Anti/.Arsenal/.session_log.jsonl","exi
+{"generatedAt":"2026-06-14T20:47:09.623Z","root":"<HAMES_ROOT>","platform":"darwin","dataSources":{"sessionLog":{"path":"<HAMES_ROOT>/Anti/.Arsenal/.session_log.jsonl","exi
 ```
 
 `/api/state`가 기존과 동일한 스냅샷을 정상 반환한다 → Phase 1 회귀 없음.

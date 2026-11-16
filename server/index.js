@@ -137,7 +137,8 @@ const server = http.createServer(async (req, res) => {
           return;
         }
       }
-      sendJSON(res, 200, orchestrator.spawnAgent({ agent: body.agent, prompt: body.prompt }));
+      // Any `agent` field is ignored: jobs always run as the main Hames agent.
+      sendJSON(res, 200, orchestrator.spawnAgent({ prompt: body.prompt }));
     } catch (err) {
       sendJSON(res, 400, { ok: false, error: String((err && err.message) || err) });
     }

@@ -13,7 +13,6 @@
   var SECTIONS = [
     { id: "overview",   label: "Overview",   icon: "▣" },
     { id: "workspaces", label: "Workspaces", icon: "▤" },
-    { id: "agents",     label: "Agents",     icon: "◈" },
     { id: "skills",     label: "Skills",     icon: "⚙" },
     { id: "harness",    label: "Harness",    icon: "⛨" },
     { id: "health",     label: "Health",     icon: "✚" },
@@ -32,7 +31,6 @@
   var jobsTimer = null;       // GET /api/jobs every 2s
   var consoleTimer = null;    // GET /api/jobs/:id every 1.5s while running
   var opsSelectedJob = null;  // currently focused job id
-  var lockSelectValue = "";   // preserve lock-workspace <select> across re-render
   var runningJobs = 0;        // for nav badge
 
   // Health (System Health / doctor) state
@@ -190,35 +188,6 @@
       '</svg>';
   }
 
-  // Deterministic monogram avatar (gradient from name hash + role-colored ring).
-  function svgAvatar(name, opts) {
-    opts = opts || {};
-    var size = opts.size || 46, h = hashStr(name), hue = h % 360, hue2 = (hue + 38) % 360;
-    var id = uid("av"), ring = opts.ring || COL.cyan, txt = initials(name), r = size / 2;
-    return '<svg width="' + size + '" height="' + size + '" viewBox="0 0 ' + size + ' ' + size + '">' +
-      '<defs><linearGradient id="' + id + '" x1="0" y1="0" x2="1" y2="1">' +
-      '<stop offset="0" stop-color="hsl(' + hue + ',52%,46%)"/>' +
-      '<stop offset="1" stop-color="hsl(' + hue2 + ',58%,28%)"/></linearGradient></defs>' +
-      '<circle cx="' + r + '" cy="' + r + '" r="' + (r - 1.5) + '" fill="url(#' + id + ')" stroke="' + ring + '" stroke-width="2"/>' +
-      '<text x="' + r + '" y="' + r + '" text-anchor="middle" dominant-baseline="central" ' +
-      'style="font-size:' + (size * 0.34) + 'px;font-weight:700" fill="#ffffff">' + esc(txt) + '</text></svg>';
-  }
-
-  function initials(name) {
-    var p = String(name || "?").replace(/[_\-.]/g, " ").trim().split(/\s+/);
-    if (p.length === 1) return (p[0] || "?").slice(0, 2).toUpperCase();
-    return ((p[0][0] || "") + (p[p.length - 1][0] || "")).toUpperCase();
-  }
-
-  var ROLE_COLORS = {
-    CFO: COL.teal, CSO: COL.cyan, CBO: COL.violet, CTO: COL.amber,
-    MARKETER: COL.teal, COO: COL.cyan, HAMES: COL.cyan
-  };
-  function roleColor(name, lvl2) {
-    var key = String(name || "").toUpperCase().split("_")[0];
-    return ROLE_COLORS[key] || (lvl2 ? COL.teal : COL.cyan);
-  }
-
   // Bucket the session feed into N bins, auto-spanning the window it covers.
   function activityBuckets(feed, nb) {
     nb = nb || 28;
@@ -276,22 +245,20 @@
 
   function renderKpis(s) {
     var k = (s && s.kpis) || {};
-    var aw = k.activeWorkspace || {};
+    var aw = k.lastWorkspace || {};
     var h = k.harness || {};
     var sm = k.submodules || {};
     var out = [];
 
     var awName = aw.name ? esc(aw.name) : "—";
-    var awHtml = '<span class="' + (aw.locked ? "v-warn" : "") + '">' + awName + "</span>" +
-      (aw.locked ? ' <span class="unit">🔒 locked</span>' : "");
-    out.push(chip("Active Workspace", awHtml, aw.locked ? "warn" : "accent"));
+    out.push(chip("Last Workspace", "<span>" + awName + "</span>", "accent"));
 
     out.push(chip("Workspaces", '<span class="v-cyan">' + num(k.workspaceCount || 0) + "</span>"));
-    out.push(chip("Locked Sessions", num(k.lockedSessions || 0)));
+    out.push(chip("Recent Subagent Calls", num(k.recentSubagentCalls || 0)));
     out.push(chip("Actions Today", '<span class="v-good">' + num(k.actionsToday || 0) + "</span>", "good"));
 
     var blocked = h.BLOCKED || 0, bypass = h.BYPASS || 0;
-    var hHtml = '<span class="v-good">' + num(h.PASS || 0) + "</span>" +
+    var hHtml = '<span class="v-good">' + num((h.PASS || 0) + (h.ALLOWED || 0)) + "</span>" +
       ' <span class="unit">/</span> <span class="' + (blocked ? "v-alert" : "muted") + '">' + num(blocked) + "</span>" +
       ' <span class="unit">/</span> <span class="' + (bypass ? "v-warn" : "muted") + '">' + num(bypass) + "</span>";
     out.push(chip("Harness P/B/Y", hHtml, blocked ? "alert" : "good"));
@@ -313,7 +280,6 @@
     if (!s) return null;
     switch (id) {
       case "workspaces": return arr(s.workspaces).length;
-      case "agents":     return arr(s.agents && s.agents.level1).length + arr(s.agents && s.agents.level2).length;
       case "skills":     return arr(s.skills).length;
       case "git":        return arr(s.git && s.git.dirty).length;
       case "operations": return runningJobs || null;
@@ -335,7 +301,7 @@
     html += '<div class="nav-foot">' +
       "session log " + dot(ds.sessionLog) + "<br>" +
       "audit log " + dot(ds.auditLog) + "<br>" +
-      "lock file " + dot(ds.lock) + "<br>" +
+      "claude subagents " + dot(ds.claudeSubagents) + "<br>" +
       "registry " + dot(ds.registry) + "</div>";
     byId("leftnav").innerHTML = html;
   }
@@ -378,11 +344,6 @@
       '<div class="em-hint">' + (hint || "") + "</div></div>";
   }
 
-  function lockBadge(locked) {
-    return locked
-      ? '<span class="badge lock">🔒 LOCKED</span>'
-      : '<span class="badge unlock">UNLOCKED</span>';
-  }
 
   function existsBadge(exists) {
     return exists
@@ -414,7 +375,7 @@
 
     // ---- HERO: harness gauge · activity area · tool-mix donut ----
     var hd = k.harness || {};
-    var pass = hd.PASS || 0, blocked = hd.BLOCKED || 0, bypass = hd.BYPASS || 0;
+    var pass = (hd.PASS || 0) + (hd.ALLOWED || 0), blocked = hd.BLOCKED || 0, bypass = hd.BYPASS || 0;
     var hTotal = pass + blocked + bypass;
     var passPct = hTotal ? Math.round((pass / hTotal) * 100) : 0;
     var gaugeColor = blocked ? COL.red : (bypass ? COL.amber : COL.teal);
@@ -444,7 +405,7 @@
       '<div class="minstat-row">' +
         '<div class="minstat"><span class="v good">' + num(k.actionsToday || 0) + '</span><span class="l">Actions Today</span></div>' +
         '<div class="minstat"><span class="v cyan">' + num(feed.length) + '</span><span class="l">Recent Ops</span></div>' +
-        '<div class="minstat"><span class="v">' + num(k.lockedSessions || 0) + '</span><span class="l">Locked Sessions</span></div>' +
+        '<div class="minstat"><span class="v">' + num(k.recentSubagentCalls || 0) + '</span><span class="l">Subagent Calls 24h</span></div>' +
         '<div class="minstat"><span class="v">' + num(k.workspaceCount || 0) + '</span><span class="l">Workspaces</span></div>' +
       '</div></div>';
 
@@ -534,25 +495,9 @@
   // ----------------------------------------------------------------
   // Section: Workspaces
   // ----------------------------------------------------------------
-  function lockControl(ws) {
-    // workspace <select> + Lock/Unlock — un-gated direct safe writes (Phase 2)
-    var opts = ws.map(function (w) {
-      var name = (w && w.name) || "";
-      var sel = (name === lockSelectValue) ? " selected" : "";
-      return '<option value="' + esc(name) + '"' + sel + ">" + esc(name) + "</option>";
-    }).join("");
-    return '<span class="lockctl">' +
-      '<select id="lockWsSelect" class="ipt-sel" aria-label="workspace to lock">' +
-        '<option value="">— workspace —</option>' + opts +
-      "</select>" +
-      '<button class="btn" data-action="lock">🔒 Lock</button>' +
-      '<button class="btn" data-action="unlock">Unlock</button>' +
-      "</span>";
-  }
-
   function renderWorkspaces(s) {
     var ws = arr(s.workspaces);
-    var h = viewHead("Workspaces", num(ws.length) + " registered", ws.length ? lockControl(ws) : "");
+    var h = viewHead("Workspaces", num(ws.length) + " registered");
     if (!ws.length) {
       h += emptyBox("◇", "No workspaces yet",
         "No registry and no <code>workspaces/*/CLAUDE.md</code> were discovered. Nothing to show — this is expected on a fresh public install.");
@@ -560,7 +505,7 @@
     }
     h += '<div class="panel" style="padding:4px 0">';
     h += '<table class="tbl"><thead><tr>' +
-      "<th>Name</th><th>Path</th><th class='right'>Actions</th><th>Last Activity</th><th>Lock</th><th>State</th><th></th>" +
+      "<th>Name</th><th>Path</th><th class='right'>Actions</th><th>Last Activity</th><th>State</th><th></th>" +
       "</tr></thead><tbody>";
     ws.forEach(function (w) {
       w = w || {};
@@ -569,52 +514,12 @@
         "<td class='mono'>" + esc(w.path || "") + "</td>" +
         "<td class='num'>" + num(w.actions || 0) + "</td>" +
         "<td class='mono nowrap'>" + (w.lastActivity ? esc(w.lastActivity) : "<span class='muted'>—</span>") + "</td>" +
-        "<td>" + lockBadge(w.locked) + "</td>" +
         "<td>" + existsBadge(w.exists !== false) + "</td>" +
         "<td class='right'>" + openBtn(w.path) + "</td>" +
         "</tr>";
     });
     h += "</tbody></table></div>";
     return h;
-  }
-
-  // ----------------------------------------------------------------
-  // Section: Agents
-  // ----------------------------------------------------------------
-  function renderAgents(s) {
-    var a = s.agents || {};
-    var l1 = arr(a.level1), l2 = arr(a.level2);
-    var h = viewHead("Agents", num(l1.length) + " level-1 · " + num(l2.length) + " level-2");
-
-    if (!l1.length && !l2.length) {
-      h += emptyBox("◈", "No agents discovered",
-        "No <code>.claude/agents/*.md</code> files were found. Drop agent definitions there and they'll be grouped here.");
-      return h;
-    }
-
-    h += '<div class="panel-title">Level 1 · Domain Agents</div>';
-    h += l1.length ? agentGrid(l1, false) : '<div class="muted" style="margin-bottom:8px">none</div>';
-
-    h += '<div class="panel-title section-gap">Level 2 · Specialist Sub-agents</div>';
-    h += l2.length ? agentGrid(l2, true) : '<div class="muted">none</div>';
-    return h;
-  }
-
-  function agentGrid(list, lvl2) {
-    var h = '<div class="grid cols-auto">';
-    list.forEach(function (ag) {
-      ag = ag || {};
-      var nm = ag.name || "?";
-      h += '<div class="agent-card' + (lvl2 ? " lvl2" : "") + '">' +
-        '<span class="avatar">' + svgAvatar(nm, { ring: roleColor(nm, lvl2), size: 46 }) + "</span>" +
-        '<div class="agent-body">' +
-          '<div class="agent-name">' + esc(nm) +
-            '<span class="agent-file">' + esc(ag.file || "") + "</span></div>" +
-          '<div class="agent-desc">' + esc(ag.description || "—") + "</div>" +
-          '<div class="agent-role">' + (lvl2 ? "Specialist" : "Domain Lead") + "</div>" +
-        "</div></div>";
-    });
-    return h + "</div>";
   }
 
   // ----------------------------------------------------------------
@@ -648,7 +553,7 @@
     var win = hd.window || 0;
     var h = viewHead("Harness", "compliance over last " + num(win) + " audit entries");
 
-    var pass = hd.PASS || 0, blocked = hd.BLOCKED || 0, bypass = hd.BYPASS || 0;
+    var pass = (hd.PASS || 0) + (hd.ALLOWED || 0), blocked = hd.BLOCKED || 0, bypass = hd.BYPASS || 0;
     var total = pass + blocked + bypass;
     var passPct = total ? Math.round((pass / total) * 100) : 0;
     var gaugeColor = blocked ? COL.red : (bypass ? COL.amber : COL.teal);
@@ -761,7 +666,7 @@
       "</div>" +
       '<div class="muted" style="margin-top:10px">' +
         "<code>save</code> / <code>pull</code> require full-autonomous mode (not enabled). " +
-        "Lock / Unlock live in <strong>Workspaces</strong>; agent spawn lives in <strong>Operations</strong>." +
+        "Agent runs live in <strong>Operations</strong>." +
       "</div>" +
       "</div>";
     return h;
@@ -794,25 +699,14 @@
   // are refreshed by their own pollers so the form/console survive state polls.
   // ----------------------------------------------------------------
   function mountOperations() {
-    var s = lastState || {};
-    var l1 = arr(s.agents && s.agents.level1);
-    var agentOpts = '<option value="COO" selected>COO (default · prompt as-is)</option>';
-    l1.forEach(function (ag) {
-      var n = (ag && ag.name) || "";
-      if (!n || n === "COO") return;
-      agentOpts += '<option value="' + esc(n) + '">' + esc(n) + "</option>";
-    });
-
     var html =
       '<div id="opsRoot">' +
-      viewHead("Operations", "spawn read-only Hames agents · live job console",
+      viewHead("Operations", "run the read-only main Hames agent · live job console",
         '<span class="badge ok" title="safe / advisory mode">SAFE MODE · read-only spawns</span>') +
       '<div class="ops-layout">' +
         // left column: spawn form + jobs list
         '<div class="ops-left">' +
-          '<div class="panel"><div class="panel-title">Spawn Agent</div>' +
-            '<label class="ipt-label">Agent</label>' +
-            '<select id="spawnAgent" class="ipt-sel ipt-full">' + agentOpts + "</select>" +
+          '<div class="panel"><div class="panel-title">Run Hames</div>' +
             '<label class="ipt-label">Task / prompt</label>' +
             '<textarea id="spawnPrompt" class="ipt-area" rows="5" ' +
               'placeholder="Describe the analysis. The agent can only Read/Grep/Glob/WebSearch and reason — it cannot write, run shell, or spawn subagents."></textarea>' +
@@ -1015,8 +909,8 @@
 
   // -- launch / stop ---------------------------------------------------------
   function launchSpawn() {
-    var agentEl = byId("spawnAgent"), promptEl = byId("spawnPrompt");
-    var agent = agentEl ? agentEl.value : "COO";
+    var promptEl = byId("spawnPrompt");
+    var agent = "Hames";
     var prompt = promptEl ? promptEl.value.trim() : "";
     if (!prompt) { setMsg("enter a task prompt before launching", "warn"); if (promptEl) promptEl.focus(); return; }
     if (!window.confirm("Launch an autonomous Hames agent? It runs under the harness.")) return;
@@ -1025,7 +919,7 @@
     fetch("/api/spawn", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ agent: agent, prompt: prompt })
+      body: JSON.stringify({ prompt: prompt })
     })
       .then(function (r) { return r.json().catch(function () { return { ok: false, reason: "bad response" }; }); })
       .then(function (res) {
@@ -1251,7 +1145,6 @@
   var RENDERERS = {
     overview: renderOverview,
     workspaces: renderWorkspaces,
-    agents: renderAgents,
     skills: renderSkills,
     harness: renderHarness,
     git: renderGit
@@ -1424,21 +1317,7 @@
       var b = e.target.closest("[data-action]");
       if (!b || b.disabled) return;
       var action = b.getAttribute("data-action");
-      if (action === "lock") {
-        var sel = byId("lockWsSelect");
-        var ws = sel ? sel.value : "";
-        if (!ws) { setMsg("select a workspace to lock", "warn"); return; }
-        lockSelectValue = ws;
-        doAction("lock", ws, b);
-        return;
-      }
-      if (action === "unlock") { doAction("unlock", undefined, b); return; }
       doAction(action, b.getAttribute("data-arg") || undefined, b);
-    });
-
-    // remember the lock-workspace selection across state-driven re-renders
-    byId("main").addEventListener("change", function (e) {
-      if (e.target && e.target.id === "lockWsSelect") lockSelectValue = e.target.value;
     });
 
     byId("liveToggle").addEventListener("click", function () { setLive(!live); });

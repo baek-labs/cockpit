@@ -132,7 +132,6 @@ body{
 }
 .proj .pn{font-weight:800;font-size:15px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .proj .pp{font-family:var(--mono);font-size:10.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.proj .lock{margin-left:auto;font-size:10px;color:var(--amber);background:rgba(247,177,84,.1);border:1px solid rgba(247,177,84,.4);border-radius:20px;padding:2px 9px;font-weight:700;flex:0 0 auto}
 .proj .meter{height:9px;border-radius:6px;background:var(--bg);overflow:hidden;border:1px solid var(--hair-soft)}
 .proj .meter>i{display:block;height:100%;border-radius:6px;background:linear-gradient(90deg,var(--teal),var(--cyan));box-shadow:0 0 12px rgba(58,215,238,.4)}
 .proj .pm{display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--muted)}
@@ -199,8 +198,9 @@ body{
   function toolKind(t){t=String(t||"").toLowerCase();if(t.indexOf("write")!==-1)return"write";if(t.indexOf("edit")!==-1)return"edit";if(t.indexOf("bash")!==-1)return"bash";return"other";}
 
   var COL={cyan:"#3ad7ee",teal:"#43e0a5",amber:"#f7b154",red:"#f56b6b",violet:"#b69bff",muted:"#7c8aa5",track:"#172234",read:"#475569",text:"#e2e8f4"};
-  var ROLE={CFO:COL.teal,CSO:COL.cyan,CBO:COL.violet,CTO:COL.amber,MARKETER:COL.teal,COO:COL.cyan,HAMES:COL.cyan};
-  function roleColor(n,l2){var k=String(n||"").toUpperCase().split("_")[0];return ROLE[k]||(l2?COL.teal:COL.cyan);}
+  // One color for the main Hames agent, one for its subagents (role agents were removed 2026-11-16).
+  var MAIN_COLOR=COL.cyan,SUB_COLOR=COL.violet;
+  var OFFICE_NOTE="Hames 루트에서 시작한 Claude Code 세션의 서브 호출만 표시합니다(Codex·LLM_Wiki·Study 세션 제외).";
 
   // Illustrated person avatar — deterministic face/hair/skin/clothes per name. Zero-asset, portable.
   var SKIN=["#f4cda3","#ecb98c","#d99e72","#c5835a","#a66a44","#85522f"];
@@ -270,48 +270,61 @@ body{
       .then(function(d){jobsByAgent={};arr(d&&d.jobs).forEach(function(j){if(j&&j.status==="running"){var a=j.agent||"";jobsByAgent[a]=(jobsByAgent[a]||0)+1;}});}).catch(function(){});
   }
 
+  // Main Hames + recent Claude Code subagent calls (newest first, from /api/state.subagents).
+  function officeMembers(s){
+    // Running count comes from the server before the 12-item display cap.
+    var subs=arr(s.subagents),subRunning=Number((s.kpis||{}).runningSubagents)||0;
+    var mainRunning=subRunning>0||(jobsByAgent["Hames"]||0)>0;
+    var list=[{name:"Hames",role:"메인 에이전트",running:mainRunning,main:true}];
+    subs.forEach(function(x){x=x||{};list.push({name:x.description||"subagent",role:(x.agentType||"subagent")+" · "+relTime(x.updatedAt),running:!!x.running,status:x.status||(x.running?"running":"done"),main:false});});
+    return list;
+  }
+  function subagentEmpty(s){
+    var src=(s.dataSources&&s.dataSources.claudeSubagents)||{};
+    if(!src.exists)return "Claude Code 기록을 찾지 못함";
+    if(!arr(s.subagents).length)return "최근 서브 호출 없음";
+    return "";
+  }
   function renderRoster(s){
-    var a=s.agents||{},l1=arr(a.level1),l2=arr(a.level2),h="";
-    h+='<div class="rlabel">Executives · '+num(l1.length)+'</div>';
-    if(!l1.length)h+='<div class="empty" style="padding:20px">no agents</div>';
-    l1.forEach(function(ag){h+=agentCard(ag,false);});
-    if(l2.length){h+='<div class="rlabel" style="margin-top:12px">Specialists · '+num(l2.length)+'</div>';l2.forEach(function(ag){h+=agentCard(ag,true);});}
+    var m=officeMembers(s),h="";
+    h+='<div class="rlabel">Main · 1</div>'+agentCard(m[0]);
+    h+='<div class="rlabel" style="margin-top:12px">Subagents · '+num(m.length-1)+'</div>';
+    var empty=subagentEmpty(s);
+    if(empty)h+='<div class="empty" style="padding:20px">'+esc(empty)+'</div>';
+    m.slice(1).forEach(function(x){h+=agentCard(x);});
     byId("roster").innerHTML=h;
   }
-  function agentCard(ag,l2){
-    ag=ag||{};var nm=ag.name||"?";var running=jobsByAgent[nm]||0;
-    var role=l2?"Specialist":(firstSentence(ag.description)||"Domain Lead");
-    var st=running?'<span class="st run">작업 '+running+'</span>':'<span class="st idle">대기</span>';
-    var dot='<span class="dot'+(running?" run":"")+'"></span>';
-    return '<div class="acard"><span class="av">'+svgPerson(nm,l2?42:48,roleColor(nm,l2))+dot+'</span>'+
-      '<div class="who"><div class="n">'+esc(nm)+'</div><div class="r">'+esc(role)+'</div></div>'+st+'</div>';
+  function agentCard(x){
+    var st=x.running?'<span class="st run">작업 중</span>':(x.status==="stale"?'<span class="st idle" style="color:var(--amber)" title="완료 기록 없이 5분 넘게 갱신이 없음">확인 필요</span>':'<span class="st idle">'+(x.main?"대기":"완료")+'</span>');
+    var dot='<span class="dot'+(x.running?" run":"")+'"></span>';
+    return '<div class="acard"><span class="av">'+svgPerson(x.name,x.main?48:42,x.main?MAIN_COLOR:SUB_COLOR)+dot+'</span>'+
+      '<div class="who"><div class="n">'+esc(firstSentence(x.name)||"?")+'</div><div class="r">'+esc(x.role)+'</div></div>'+st+'</div>';
   }
   function firstSentence(d){if(!d)return"";var s=String(d).split(/[.。\n]/)[0];return s.length>26?s.slice(0,26)+"…":s;}
 
   function renderMain(s){
-    var k=s.kpis||{},a=s.agents||{},feed=arr(s.sessionFeed),ws=arr(s.workspaces);
-    var hd=k.harness||{},pass=hd.PASS||0,blocked=hd.BLOCKED||0,bypass=hd.BYPASS||0,tot=pass+blocked+bypass;
+    var k=s.kpis||{},feed=arr(s.sessionFeed),ws=arr(s.workspaces);
+    var hd=k.harness||{},pass=(hd.PASS||0)+(hd.ALLOWED||0),blocked=hd.BLOCKED||0,bypass=hd.BYPASS||0,tot=pass+blocked+bypass;
     var passPct=tot?Math.round((pass/tot)*100):0;
-    var agentTotal=arr(a.level1).length+arr(a.level2).length;
     var buckets=activityBuckets(feed,24);
     var h="";
 
     // team hero — illustrated people (the office's reason to exist)
-    var l1=arr(a.level1);
+    var members=officeMembers(s);
     h+='<div class="sec-h">우리 팀 · The Team</div><div class="team">';
-    if(!l1.length){h+='<div class="empty" style="width:100%">아직 에이전트가 없습니다. <code>.claude/agents/*.md</code>가 감지되면 팀으로 표시됩니다.</div>';}
-    l1.forEach(function(ag){
-      ag=ag||{};var nm=ag.name||"?";var running=jobsByAgent[nm]||0;
-      h+='<div class="tmem"><span class="tav">'+svgPerson(nm,72,roleColor(nm,false))+'<span class="dot'+(running?" run":"")+'"></span></span>'+
-        '<div class="tn">'+esc(nm)+'</div><div class="tr">'+esc(firstSentence(ag.description)||"Domain Lead")+'</div></div>';
+    members.forEach(function(x){
+      h+='<div class="tmem"><span class="tav">'+svgPerson(x.name,x.main?72:60,x.main?MAIN_COLOR:SUB_COLOR)+'<span class="dot'+(x.running?" run":"")+'"></span></span>'+
+        '<div class="tn">'+esc(x.main?x.name:firstSentence(x.name))+'</div><div class="tr">'+esc(x.role)+'</div></div>';
     });
-    h+='</div>';
+    var empty=subagentEmpty(s);
+    if(empty)h+='<div class="empty" style="flex:1;min-width:200px">'+esc(empty)+'</div>';
+    h+='</div><div class="tr" style="margin:0 4px 8px;color:var(--muted);font-size:11px">'+esc(OFFICE_NOTE)+'</div>';
 
     // KPI hero
     h+='<div class="sec-h gap">오늘의 현황 · Today</div><div class="kpis">';
     h+=kpiCard("c1","⚡",num(k.actionsToday||0),"Actions Today",svgSpark(buckets,280,34,COL.cyan));
-    h+=kpiCard("c2","▤",num(k.workspaceCount||0),"Workspaces · "+num(k.lockedSessions||0)+" locked","");
-    h+=kpiCard("c3","◈",num(agentTotal),"Agents on Roster","");
+    h+=kpiCard("c2","▤",num(k.workspaceCount||0),"Workspaces","");
+    h+=kpiCard("c3","◈",num(k.recentSubagentCalls||0),"최근 서브 호출 수","");
     h+=kpiCard("c4","⛨",passPct+"%","Harness Pass Rate","");
     h+='</div>';
 
@@ -329,7 +342,7 @@ body{
         h+='<div class="proj"><div class="proj-top">'+
           '<span class="badge-ic" style="background:linear-gradient(135deg,hsl('+hue+',60%,55%),hsl('+((hue+40)%360)+',64%,40%))">'+esc(initials(w.name))+'</span>'+
           '<div style="min-width:0"><div class="pn">'+esc(w.name||"?")+'</div><div class="pp">'+esc(w.path||"")+'</div></div>'+
-          (w.locked?'<span class="lock">🔒 LOCK</span>':'')+'</div>'+
+          '</div>'+
           '<div class="meter"><i style="width:'+Math.max(pct,3)+'%"></i></div>'+
           '<div class="pm"><span><b>'+num(w.actions||0)+'</b> actions</span><span>'+(w.lastActivity?relTime(w.lastActivity):"no activity")+'</span></div>'+
           '</div>';

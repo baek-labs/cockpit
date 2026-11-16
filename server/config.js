@@ -2,9 +2,10 @@
 
 // Hames Cockpit — runtime discovery (CONTRACT section 1).
 // Hardcode nothing: detect every data source by first-existing candidate so the
-// same server runs on this 16-workspace install AND a fresh public clone.
+// same server runs on a full install AND a fresh public clone.
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 
@@ -37,6 +38,21 @@ function makeOpener(platform) {
   };
 }
 
+// Mirrors getHamesLogDir() in Anti/.Arsenal/log_rotation.js.
+function hamesLogDir(platform) {
+  const env = process.env.HAMES_LOG_DIR;
+  if (env && env.trim()) return path.resolve(env.trim());
+  if (platform === 'win32') {
+    return path.join(process.env.LOCALAPPDATA || os.homedir(), 'Hames', 'Logs');
+  }
+  if (platform === 'darwin') return path.join(os.homedir(), 'Library', 'Logs', 'Hames');
+  return path.join(
+    process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local', 'state'),
+    'hames',
+    'logs'
+  );
+}
+
 function loadConfig() {
   const platform = process.platform;
 
@@ -50,20 +66,22 @@ function loadConfig() {
     path.join(root, '.Arsenal'),
   ]); // null if none
 
-  const sessionCandidates = [
-    arsenalDir ? path.join(arsenalDir, '.session_log.jsonl') : null,
-    path.join(root, '.session_log.jsonl'),
-    path.join(root, '.claude', '.session_log.jsonl'),
-  ].filter(Boolean);
-  const sessionLog = firstExisting(sessionCandidates) || sessionCandidates[0];
+  // Hook logs live outside the repository (see Anti/.Arsenal/log_rotation.js):
+  // HAMES_LOG_DIR if set, else the per-OS log folder.
+  const logDir = hamesLogDir(platform);
+  const sessionLog = path.join(logDir, 'session_log.jsonl');
+  const auditLog = path.join(logDir, 'workspace_audit.log');
 
-  const auditLog = path.join(root, '.claude', 'workspace_audit.log');
-  const lockFile = path.join(root, '.claude', '.workspace_lock');
+  // Claude Code keeps per-project transcripts under ~/.claude/projects/<key>,
+  // where <key> is the absolute root path with every non-alphanumeric char
+  // replaced by '-'. Subagent records sit in <session>/subagents/.
+  const claudeProjectDir = path.join(
+    os.homedir(), '.claude', 'projects', root.replace(/[^A-Za-z0-9]/g, '-')
+  );
 
   const registryPath = path.join(root, '.claude', 'workspace_paths.json');
   const registry = fs.existsSync(registryPath) ? registryPath : null;
 
-  const agentsDir = firstExisting([path.join(root, '.claude', 'agents')]);
   const commandsDir = firstExisting([path.join(root, '.claude', 'commands')]);
 
   const handoffsDir = path.join(root, 'Anti', '999_AI_Communication', '_Inbox');
@@ -80,10 +98,10 @@ function loadConfig() {
     arsenalDir,
     sessionLog,
     auditLog,
-    lockFile,
+    logDir,
+    claudeProjectDir,
     registry,         // null when absent (=> empty registry, scan fallback)
     registryPath,     // canonical path for display even when absent
-    agentsDir,
     commandsDir,
     handoffsDir,
     webDir,

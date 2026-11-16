@@ -5,6 +5,7 @@
 // default, never throw to the caller. Big files are read whole then sliced.
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
@@ -83,88 +84,9 @@ function todayLocal() {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-// ---------- alive session detection ----------
-
-// Lock-file keys are session ids; `.claude/sessions/<pid>.id` maps a live host
-// PID to its session id (written by the SessionStart hook). A lock whose owning
-// process is gone is stale and must not count as an active lock. Returns a Set
-// of alive session ids, or null when the sessions dir is absent (fresh clone)
-// so callers fall back to counting every lock.
-function aliveSessionIds(root) {
-  let files;
-  const dir = path.join(root, '.claude', 'sessions');
-  try {
-    files = fs.readdirSync(dir);
-  } catch (_) {
-    return null; // cannot determine → caller keeps legacy "count all" behavior
-  }
-  const alive = new Set();
-  for (const f of files) {
-    if (!f.endsWith('.id')) continue;
-    const pid = Number(f.slice(0, -3));
-    if (!Number.isInteger(pid) || pid <= 0) continue;
-    let isAlive = false;
-    try {
-      process.kill(pid, 0); // signal 0: existence probe, sends nothing
-      isAlive = true;
-    } catch (e) {
-      isAlive = !!e && e.code === 'EPERM'; // exists but owned by another user
-    }
-    if (!isAlive) continue;
-    const sid = readText(path.join(dir, f)).trim();
-    if (sid) alive.add(sid);
-  }
-  return alive;
-}
-
-// ---------- lock file (v1 / v2) ----------
-
-function readLock(lockPath, aliveSids) {
-  const empty = { current: { name: null, locked: false }, lockedSessions: 0, lockedWorkspaces: new Set() };
-  const data = readJSON(lockPath, null);
-  if (!data || typeof data !== 'object') return empty;
-
-  const lockedWorkspaces = new Set();
-  let lockedSessions = 0;
-
-  if (data.version === 2 && data.sessions && typeof data.sessions === 'object') {
-    let current = { name: null, locked: false };
-    let latest = -Infinity;
-    for (const [sid, entry] of Object.entries(data.sessions)) {
-      if (!entry || typeof entry !== 'object') continue;
-      // Skip locks whose owning session process is gone: a stale entry would
-      // otherwise surface as the active workspace (the original "shows Youtube
-      // when Youtube isn't in use" bug). aliveSids === null means we cannot
-      // tell (no sessions dir), so keep every entry.
-      if (aliveSids && !aliveSids.has(sid)) continue;
-      if (!entry.locked) continue;
-      lockedSessions += 1;
-      if (entry.workspace) lockedWorkspaces.add(entry.workspace);
-      const t = Date.parse(entry.updated_at || '');
-      if (!Number.isNaN(t) && t >= latest) {
-        latest = t;
-        current = { name: entry.workspace || null, locked: true };
-      }
-    }
-    return { current, lockedSessions, lockedWorkspaces };
-  }
-
-  // v1 shape
-  const locked = !!data.locked;
-  if (locked) {
-    lockedSessions = 1;
-    if (data.workspace) lockedWorkspaces.add(data.workspace);
-  }
-  return {
-    current: { name: data.workspace || null, locked },
-    lockedSessions,
-    lockedWorkspaces,
-  };
-}
-
 // ---------- workspaces ----------
 
-function buildWorkspaces(cfg, sessionEntries, lock) {
+function buildWorkspaces(cfg, sessionEntries) {
   // index session activity by workspace name
   const counts = new Map();
   const last = new Map();
@@ -182,7 +104,6 @@ function buildWorkspaces(cfg, sessionEntries, lock) {
     exists: exists(path.join(cfg.root, rel)),
     actions: counts.get(name) || 0,
     lastActivity: last.get(name) || null,
-    locked: lock.lockedWorkspaces.has(name),
   });
 
   const registry = cfg.registry ? readJSON(cfg.registry, null) : null;
@@ -210,7 +131,7 @@ function buildWorkspaces(cfg, sessionEntries, lock) {
   return out;
 }
 
-// ---------- agents / skills ----------
+// ---------- subagents / skills ----------
 
 function listMd(dir) {
   if (!dir || !exists(dir)) return [];
@@ -221,17 +142,69 @@ function listMd(dir) {
   }
 }
 
-function buildAgents(cfg) {
-  const level1 = [];
-  const level2 = [];
-  for (const file of listMd(cfg.agentsDir)) {
-    const base = file.replace(/\.md$/i, '');
-    const fm = readFrontmatter(path.join(cfg.agentsDir, file));
-    const entry = { name: fm.name || base, file, description: fm.description || '' };
-    if (base.includes('_')) level2.push(entry);
-    else level1.push(entry);
+// Recent Claude Code subagent calls for the virtual office. Reads only each
+// agent-*.meta.json (description, agentType, finished) and the mtime of the
+// matching agent-*.jsonl. Transcript contents are never read.
+// Covers Claude Code sessions started at the Hames root only (Codex excluded).
+const SUBAGENT_WINDOW_MS = Number(process.env.COCKPIT_SUBAGENT_WINDOW_MS) || 24 * 60 * 60 * 1000;
+const SUBAGENT_LIMIT = Number(process.env.COCKPIT_SUBAGENT_LIMIT) || 12;
+const SUBAGENT_RUNNING_MS = Number(process.env.COCKPIT_SUBAGENT_RUNNING_MS) || 5 * 60 * 1000;
+
+function safeReaddir(dir) {
+  try {
+    return fs.readdirSync(dir, { withFileTypes: true });
+  } catch (_) {
+    return [];
   }
-  return { level1, level2 };
+}
+
+function buildSubagents(cfg) {
+  // config.js normally supplies this; fall back to the same rule if it is absent.
+  const projectDir = cfg.claudeProjectDir || path.join(
+    os.homedir(), '.claude', 'projects', String(cfg.root || '').replace(/[^A-Za-z0-9]/g, '-')
+  );
+  const now = Date.now();
+  let found = false;
+  const recent = [];
+  for (const sess of safeReaddir(projectDir)) {
+    if (!sess.isDirectory()) continue;
+    const subDir = path.join(projectDir, sess.name, 'subagents');
+    if (!exists(subDir)) continue;
+    found = true;
+    for (const f of safeReaddir(subDir)) {
+      if (!f.isFile() || !/^agent-.+\.meta\.json$/.test(f.name)) continue;
+      const jsonl = path.join(subDir, f.name.replace(/\.meta\.json$/, '.jsonl'));
+      let mtime;
+      try {
+        mtime = fs.statSync(jsonl).mtimeMs;
+      } catch (_) {
+        continue;
+      }
+      if (now - mtime > SUBAGENT_WINDOW_MS) continue;
+      const meta = readJSON(path.join(subDir, f.name), null);
+      if (!meta || typeof meta !== 'object') continue;
+      // status: 'done' only when the record says finished; an unfinished record
+      // that stopped updating is 'stale' (unknown), never reported as done.
+      const finished = meta.finished === true;
+      const fresh = now - mtime <= SUBAGENT_RUNNING_MS;
+      const status = finished ? 'done' : (fresh ? 'running' : 'stale');
+      recent.push({
+        description: typeof meta.description === 'string' ? meta.description : '',
+        agentType: typeof meta.agentType === 'string' ? meta.agentType : '',
+        running: status === 'running',
+        finished,
+        status,
+        updatedAt: new Date(mtime).toISOString(),
+      });
+    }
+  }
+  recent.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0));
+  return {
+    source: { path: projectDir, exists: found },
+    total: recent.length,
+    running: recent.filter((x) => x.running).length, // counted before the display cap
+    list: recent.slice(0, SUBAGENT_LIMIT),
+  };
 }
 
 function buildSkills(cfg) {
@@ -343,8 +316,6 @@ function buildGit(root) {
 function buildState(cfg) {
   const sessionEntries = readJSONL(cfg.sessionLog);
   const auditEntries = readJSONL(cfg.auditLog);
-  const aliveSids = aliveSessionIds(cfg.root);
-  const lock = readLock(cfg.lockFile, aliveSids);
 
   // harness aggregate over last window
   const harness = { window: HARNESS_WINDOW };
@@ -359,7 +330,13 @@ function buildState(cfg) {
     (e) => (e && typeof e.ts === 'string' ? e.ts.slice(0, 10) : '') === today
   ).length;
 
-  const workspaces = buildWorkspaces(cfg, sessionEntries, lock);
+  const workspaces = buildWorkspaces(cfg, sessionEntries);
+  const subagents = buildSubagents(cfg);
+  let lastWorkspace = null;
+  for (let i = sessionEntries.length - 1; i >= 0; i -= 1) {
+    const ws = sessionEntries[i] && sessionEntries[i].workspace;
+    if (ws) { lastWorkspace = ws; break; }
+  }
   const gitInfo = buildGit(cfg.root);
   const submoduleDirty = gitInfo.submodules.filter((s) => s.dirty).length;
 
@@ -373,23 +350,24 @@ function buildState(cfg) {
     dataSources: {
       sessionLog: { path: cfg.sessionLog, exists: exists(cfg.sessionLog) },
       auditLog: { path: cfg.auditLog, exists: exists(cfg.auditLog) },
-      lock: { path: cfg.lockFile, exists: exists(cfg.lockFile) },
+      claudeSubagents: subagents.source,
       registry: {
         path: cfg.registry || cfg.registryPath,
         exists: exists(cfg.registry || cfg.registryPath),
       },
     },
     kpis: {
-      activeWorkspace: { name: lock.current.name, locked: lock.current.locked },
+      lastWorkspace: { name: lastWorkspace },
       workspaceCount: workspaces.length,
-      lockedSessions: lock.lockedSessions,
+      recentSubagentCalls: subagents.total,
+      runningSubagents: subagents.running,
       actionsToday,
       harness,
       submodules: { total: gitInfo.submodules.length, dirty: submoduleDirty },
       gitDirty: gitInfo.dirty.length,
     },
     workspaces,
-    agents: buildAgents(cfg),
+    subagents: subagents.list,
     skills: buildSkills(cfg),
     git: gitInfo,
     sessionFeed,

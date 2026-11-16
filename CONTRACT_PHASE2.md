@@ -4,9 +4,18 @@
 > Do not touch the other's folder. Orchestrator (parent) writes this file, integrates, tests.
 > Keep all Phase-1 behavior working; Phase 2 ADDS operation on top of the read cockpit.
 
-Phase 2 goal: turn the gated buttons into real actions — **lock/unlock, save, pull, and agent
+Phase 2 goal: turn the gated buttons into real actions — **save, pull, and agent
 spawn** — by having the backend launch real Claude Code runs (`claude -p`) and stream their
 output to a live job console in the UI. The cockpit becomes operational, not just a viewer.
+
+## ⚠ 2026-11-16 UPDATE (authoritative — overrides everything below)
+
+- Role agents were removed from Hames. Every spawn runs as the main Hames agent: `POST /api/spawn`
+  takes `{prompt}`; an `agent` field is ignored, and every job's `agent`/`label` is `"Hames"`. The
+  prompt is passed as-is (no role prompt composition).
+- Hames removed the workspace lock on 2026-11-11. The cockpit has no lock/unlock actions and never
+  writes the lock file or the audit log.
+- `/api/state` no longer has `agents`; see `CONTRACT.md` §3 for `subagents`.
 
 ## ⚠ SAFE-MODE OVERRIDE (authoritative — CEO chose advisory mode)
 
@@ -23,8 +32,8 @@ These rules OVERRIDE anything below that conflicts. The CEO selected **safe / ad
 2. **save / pull are NOT executed in this pass.** Do NOT implement `orchestrator.runSlash`. The
    save/pull buttons stay **gated/disabled** with the note "requires full-autonomous mode (not enabled)".
    `POST /api/action {type:'save'|'pull'}` → `{ok:false, gated:true, message:"requires full-autonomous mode"}`.
-3. **IN scope (build these):** read-only agent spawn + lock/unlock (direct safe writes) + the live
-   jobs console. Un-gate ONLY the spawn / lock / unlock buttons (save/pull stay gated).
+3. **IN scope (build these):** read-only agent spawn + the live jobs console. Un-gate ONLY the
+   spawn button (save/pull stay gated).
 4. Ignore every `--dangerously-skip-permissions` mention and the save/pull composed-prompt lines below.
 
 ## Safety model (read carefully — this is the whole point)
@@ -100,40 +109,25 @@ Normalized event shapes (what the frontend renders):
 - `{ t:'error', text:'...' }`                           ← spawn error / nonzero exit / parse-fatal
 
 Composed prompts:
-- agent in {CFO,CSO,CBO,CTO,Marketer}: 
-  `"You are acting as the Hames ${agent}. Task: ${userPrompt}\n\nDefault to advisory mode — read what you need and return a clear, structured result. Make file changes only if the task explicitly requires it."`
-- agent == 'COO' or empty: `userPrompt` as-is.
+- agent spawn: `userPrompt` as-is (main Hames agent).
 - save: `"Run the /save command (the Hames save skill) now: commit all changes and push to main with the submodule safety checks. Report the outcome concisely."`
 - pull: `"Run the /pull command (the Hames pull skill) now: pull the parent and update all submodules. Report the outcome concisely."`
 
-### Edit `server/actions.js`
-Keep Phase-1 actions. ADD:
-- `setLock(workspace)`: read `.claude/.workspace_lock` (v2 `{version:2,sessions:{}}`; if missing/v1, create v2),
-  set `sessions['cockpit'] = { workspace, locked:true, updated_at: new Date().toISOString() }`, write back
-  (pretty JSON). Append one line to the audit log: `{"ts":ISO,"hook":"cockpit","result":"LOCK_SET","tool":"cockpit","workspace":workspace}`.
-  Return `{ ok:true, lock:{ workspace, locked:true } }`.
-- `clearLock()`: same but `sessions['cockpit'] = { workspace:null, locked:false, updated_at:ISO }`; audit `"LOCK_CLEAR"`.
-  Return `{ ok:true, lock:{ workspace:null, locked:false } }`.
-- These manage the cockpit's OWN lock entry (keyed `'cockpit'`). Document inline that this sets the
-  cockpit-declared lock; it does not force-lock other already-running Claude sessions.
-
 ### Edit `server/index.js`
 Keep Phase-1 routes. ADD:
-- `POST /api/spawn`  body `{agent, prompt}` → `orchestrator.spawnAgent` → `{ok:true, jobId}` (or `{ok:false,reason}`).
+- `POST /api/spawn`  body `{prompt}` (any `agent` field ignored) → `orchestrator.spawnAgent` → `{ok:true, jobId}` (or `{ok:false,reason}`).
 - `GET  /api/jobs`             → `{ jobs: orchestrator.getJobs() }`.
 - `GET  /api/jobs/:id`         → full job, or 404 `{error}`.
 - `POST /api/jobs/:id/stop`    → `{ ok: orchestrator.stopJob(id) }`.
 - Extend `POST /api/action` dispatch:
   - `type:"save"` → `{ok:true, jobId: orchestrator.runSlash('save')}`
   - `type:"pull"` → `{ok:true, jobId: orchestrator.runSlash('pull')}`
-  - `type:"lock"`, `arg:"<workspace>"` → `actions.setLock(arg)`
-  - `type:"unlock"` → `actions.clearLock()`
   - existing `git.fetch`/`open`/`refresh` unchanged.
 - Parse `:id` from the path manually (no framework). Keep zero dependencies.
 
 ### W1 done signal
 Start the server, then run a REAL pipeline test (cheap):
-`curl -s -X POST http://127.0.0.1:8765/api/spawn -H 'content-type: application/json' -d '{"agent":"COO","prompt":"Reply with exactly one word: PONG"}'`
+`curl -s -X POST http://127.0.0.1:8765/api/spawn -H 'content-type: application/json' -d '{"prompt":"Reply with exactly one word: PONG"}'`
 then poll `GET /api/jobs/<id>` until status != running and paste the final job JSON (RAW). Then
 `curl -s http://127.0.0.1:8765/api/state | head -c 200` to confirm Phase 1 still works. Stop server, print `[W1 DONE]`.
 
@@ -143,10 +137,9 @@ then poll `GET /api/jobs/<id>` until status != running and paste the final job J
 
 Keep all Phase-1 panels working. CHANGES:
 
-1. **Un-gate** the disabled lock/unlock/save/pull/spawn buttons (remove the `gatedBtn` disabling).
+1. **Un-gate** the disabled save/pull/spawn buttons (remove the `gatedBtn` disabling).
 2. **New left-nav section `Operations`** (add to the nav list) containing:
-   - **Spawn form:** an agent `<select>` populated from `state.agents.level1` names plus a `COO`
-     option (default `COO`); a prompt `<textarea>`; a **Launch** button. On launch → `confirm()`
+   - **Spawn form:** a prompt `<textarea>` and a **Launch** button (runs the main Hames agent). On launch → `confirm()`
      ("Launch an autonomous Hames agent? It runs under the harness.") → `POST /api/spawn` →
      on `{jobId}` open that job's console.
    - **Jobs list:** poll `GET /api/jobs` every 2s; render newest-first rows (kind/agent chip,
@@ -158,10 +151,6 @@ Keep all Phase-1 panels working. CHANGES:
      **Escape every event string** (agent output can contain `<>&"`).
 3. **Wire save/pull:** the `save`/`pull` buttons → `confirm()` → `POST /api/action {type}` →
    on `{jobId}` jump to that job console (they stream like any job).
-4. **Wire lock/unlock:** a small control (in the KPI area or Workspaces header) — a workspace
-   `<select>` + **Lock**/**Unlock** buttons → `POST /api/action {type:'lock',arg:ws}` /
-   `{type:'unlock'}` → on success refresh state so the KPI active-workspace updates. (No confirm
-   needed — reversible.)
 5. Keep the ShipOS aesthetic; the job console should feel like the ShipOS live-agent stream
    (monospace, tool chips, status colors). Reuse existing CSS variables/classes.
 
@@ -173,13 +162,11 @@ Print the changed file list and `[W2 DONE]`. (Orchestrator runs the live end-to-
 ## Shared API summary (the seam)
 
 ```
-POST /api/spawn        {agent,prompt}            -> {ok, jobId} | {ok:false, reason}
+POST /api/spawn        {prompt}                  -> {ok, jobId} | {ok:false, reason}
 GET  /api/jobs                                   -> {jobs:[{id,kind,agent,label,status,startedAt,endedAt,summary}]}
 GET  /api/jobs/:id                               -> full job {id,kind,agent,prompt,status,startedAt,endedAt,exitCode,result,events:[{t,...}]}
 POST /api/jobs/:id/stop                          -> {ok}
 POST /api/action {type:'save'|'pull'}            -> {ok, jobId}
-POST /api/action {type:'lock', arg:'<ws>'}       -> {ok, lock:{workspace,locked}}
-POST /api/action {type:'unlock'}                 -> {ok, lock:{workspace:null,locked:false}}
 POST /api/action {type:'git.fetch'|'open'|'refresh'}   (Phase 1, unchanged)
 GET  /api/state                                  (Phase 1, unchanged)
 ```

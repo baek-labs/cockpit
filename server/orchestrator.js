@@ -16,23 +16,11 @@ const readline = require('readline');
 
 const MAX_CONCURRENT = 3;
 const MAX_EVENTS = 2000;
-const ADVISORY_AGENTS = new Set(['CFO', 'CSO', 'CBO', 'CTO', 'Marketer']);
+// Every job runs as the main Hames agent; role agents were removed 2026-11-16.
+const MAIN_AGENT = 'Hames';
 
 function nowISO() {
   return new Date().toISOString();
-}
-
-function composePrompt(agent, userPrompt) {
-  const a = (agent || '').trim();
-  if (ADVISORY_AGENTS.has(a)) {
-    return (
-      `You are acting as the Hames ${a}. Task: ${userPrompt}\n\n` +
-      'Default to advisory mode — read what you need and return a clear, ' +
-      'structured result. Make file changes only if the task explicitly requires it.'
-    );
-  }
-  // COO or empty → pass through as-is.
-  return userPrompt;
 }
 
 function briefForToolInput(input) {
@@ -124,7 +112,7 @@ function createOrchestrator(cfg) {
   }
 
   // Launch the read-only claude run. Returns { ok:true, jobId } | { ok:false, reason }.
-  function spawnAgent({ agent, prompt }) {
+  function spawnAgent({ prompt }) {
     if (runningCount() >= MAX_CONCURRENT) {
       return { ok: false, reason: 'max concurrent jobs' };
     }
@@ -134,12 +122,11 @@ function createOrchestrator(cfg) {
     }
 
     const id = 'job_' + Date.now().toString(36) + (counter++).toString(36);
-    const composed = composePrompt(agent, userPrompt);
 
     const job = {
       id,
       kind: 'agent',
-      agent: agent || null,
+      agent: MAIN_AGENT,
       prompt: userPrompt,
       status: 'running',
       startedAt: nowISO(),
@@ -152,7 +139,7 @@ function createOrchestrator(cfg) {
 
     // READ-ONLY spawn args (SAFE-MODE OVERRIDE — no permission bypass).
     const args = [
-      '-p', composed,
+      '-p', userPrompt,
       '--output-format', 'stream-json',
       '--verbose',
       '--disallowedTools', 'Write', 'Edit', 'NotebookEdit', 'Bash', 'Task',
@@ -216,7 +203,7 @@ function createOrchestrator(cfg) {
       id: j.id,
       kind: j.kind,
       agent: j.agent,
-      label: j.agent || j.kind,
+      label: MAIN_AGENT,
       status: j.status,
       startedAt: j.startedAt,
       endedAt: j.endedAt,
